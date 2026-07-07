@@ -33,20 +33,25 @@ fun AssetsScreen(
     val uiState by viewModel.uiState.collectAsState()
     val accounts by viewModel.registeredAccounts.collectAsState()
     val selectedAccount by viewModel.selectedAccount.collectAsState()
-    val numberFormat = DecimalFormat("#,###")
 
-    // 💡 국내주식 전용 컬러 지정
-    val stockColorUp = Color(0xFFFF3737)   // 상승
-    val stockColorDown = Color(0xFF37C4FF) // 하락
+    // 💡 객체 재사용(메모리 낭비 방지)
+    val numberFormat = remember { DecimalFormat("#,###") }
+    val stockColorUp = remember { Color(0xFFFF3737) }
+    val stockColorDown = remember { Color(0xFF37C4FF) }
 
-    // 💡 뷰페이저 상태 관리 (계좌 리스트 개수 기반)
     val pagerState = rememberPagerState(pageCount = { accounts.size.coerceAtLeast(1) })
 
     LaunchedEffect(Unit) {
         viewModel.initAssets()
     }
 
-    // 💡 사용자가 화면을 좌우로 드래그(스와이프)했을 때 탭과 연동하여 API 호출
+    // 💡 화면을 완전히 벗어날 때(로그아웃 등) ViewModel 상태를 비워줌
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.clearData()
+        }
+    }
+
     LaunchedEffect(pagerState.currentPage) {
         if (accounts.isNotEmpty()) {
             val currentTabAccount = accounts[pagerState.currentPage]
@@ -56,7 +61,6 @@ fun AssetsScreen(
         }
     }
 
-    // 💡 사용자가 칩(버튼)을 클릭하여 계좌가 변경되었을 때 화면(페이저) 스크롤 이동
     LaunchedEffect(selectedAccount) {
         if (accounts.isNotEmpty() && selectedAccount.isNotEmpty()) {
             val index = accounts.indexOf(selectedAccount)
@@ -86,10 +90,20 @@ fun AssetsScreen(
                 items(accounts) { accNumber ->
                     val isSelected = selectedAccount == accNumber
 
+                    // 💡 계좌번호 마스킹 처리 (앞 4자리, 뒤 2자리 노출, 나머지 별표)
+                    val maskedAccount = if (accNumber.length >= 6) {
+                        val firstPart = accNumber.take(4)
+                        val lastPart = accNumber.takeLast(2)
+                        val middleStars = "*".repeat(accNumber.length - 6)
+                        "$firstPart$middleStars$lastPart"
+                    } else {
+                        accNumber
+                    }
+
                     FilterChip(
                         selected = isSelected,
                         onClick = { if (!isSelected) viewModel.requestBalanceForAccount(accNumber) },
-                        label = { Text(accNumber, fontWeight = FontWeight.Bold) },
+                        label = { Text(maskedAccount, fontWeight = FontWeight.Bold) }, // 💡 마스킹된 변수로 교체
                         colors = FilterChipDefaults.filterChipColors(
                             selectedContainerColor = ColorStatus,
                             selectedLabelColor = ColorBg,
@@ -105,11 +119,7 @@ fun AssetsScreen(
             }
         }
 
-        // 💡 페이저를 통해 화면 구조를 좌우 드래그 가능하게 매핑
-        HorizontalPager(
-            state = pagerState,
-            modifier = Modifier.fillMaxSize()
-        ) { page ->
+        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
             when (uiState) {
                 is AssetsViewModel.UiState.Loading -> {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -152,7 +162,6 @@ fun AssetsScreen(
                                 )
                                 Spacer(Modifier.height(8.dp))
 
-                                // 💡 실현 손익 색상 및 + 기호 적용
                                 val totalPnl = data.summary?.totalProfitAndLoss ?: 0L
                                 val pnlColor = if (totalPnl > 0) stockColorUp else if (totalPnl < 0) stockColorDown else ColorTextPrimary
                                 val pnlPrefix = if (totalPnl > 0) "+" else ""
@@ -185,7 +194,6 @@ fun AssetsScreen(
                                             Text("${stock.quantity}주 | 평단가 ${numberFormat.format(stock.averagePrice)}", color = ColorTextSecondary, fontSize = 12.sp)
                                         }
                                         Column(horizontalAlignment = Alignment.End) {
-                                            // 💡 종목 수익률 색상 및 + 기호 적용
                                             val isProfit = stock.returnRate > 0
                                             val isLoss = stock.returnRate < 0
                                             val rateColor = if (isProfit) stockColorUp else if (isLoss) stockColorDown else ColorTextPrimary

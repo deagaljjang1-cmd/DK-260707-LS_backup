@@ -17,9 +17,10 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 
 class AssetsViewModel(application: Application) : AndroidViewModel(application) {
-    private val tokenManager = TokenManager(application)
+    private val tokenManager = TokenManager.getInstance(application)
     private val auth = FirebaseAuth.getInstance()
-    private val currentUid = auth.currentUser?.uid ?: ""
+
+    // 💡 (수정) 뷰모델 생성 시점에 UID를 박제(캐싱)하던 로직 삭제
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -33,11 +34,25 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
     private var fetchJob: Job? = null
     private var lastRequestTime = 0L
 
+    // 💡 화면 잔상을 비워주는 초기화 함수
+    fun clearData() {
+        _uiState.value = UiState.Idle
+        _registeredAccounts.value = emptyList()
+        _selectedAccount.value = ""
+        fetchJob?.cancel()
+    }
+
     fun initAssets() {
+        // 💡 동적으로 현재 로그인된 사용자의 UID 호출
+        val currentUid = auth.currentUser?.uid ?: ""
+
         if (currentUid.isEmpty()) {
             _uiState.value = UiState.Error("로그인 정보가 없습니다.")
             return
         }
+
+        // 이전 계정의 잔상을 완전히 비운 뒤 새로 데이터를 구성
+        clearData()
 
         val accounts = tokenManager.getAccountNumbers(currentUid)
         _registeredAccounts.value = accounts
@@ -47,42 +62,13 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        val userAppKey = tokenManager.getAppKey(currentUid)
-        val userAppSecret = tokenManager.getSecretKey(currentUid)
-        if (userAppKey.isNullOrEmpty() || userAppSecret.isNullOrEmpty()) {
-            _uiState.value = UiState.Error("앱키와 시크릿키가 설정되지 않았습니다. 계정 설정에서 입력해 주세요.")
-            return
-        }
-
-        val existingToken = tokenManager.getAccessToken(currentUid)
-        if (!existingToken.isNullOrEmpty()) {
-            requestBalanceForAccount(accounts.first())
-        } else {
-            issueAccessTokenAndFetch(userAppKey, userAppSecret, accounts.first())
-        }
-    }
-
-    private fun issueAccessTokenAndFetch(appKey: String, appSecret: String, targetAccount: String) {
-        fetchJob?.cancel()
-        fetchJob = viewModelScope.launch {
-            _uiState.value = UiState.Loading
-            _selectedAccount.value = targetAccount
-            try {
-                val response = RetrofitClient.lsApi.getAccessToken(appKey = appKey, appSecretKey = appSecret)
-                if (response.isSuccessful && response.body() != null) {
-                    val token = response.body()!!.accessToken
-                    tokenManager.saveAccessToken(currentUid, token)
-                    fetchBalance(targetAccount, token)
-                } else {
-                    _uiState.value = UiState.Error("토큰 발급 실패: ${response.code()}")
-                }
-            } catch (e: Exception) {
-                _uiState.value = UiState.Error("네트워크 오류: ${e.localizedMessage}")
-            }
-        }
+        requestBalanceForAccount(accounts.first())
     }
 
     fun requestBalanceForAccount(accountNumber: String) {
+        val currentUid = auth.currentUser?.uid ?: ""
+        if (currentUid.isEmpty()) return
+
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastRequestTime < 1000) {
             _uiState.value = UiState.Error("조회 요청이 너무 빠릅니다.\n잠시 후 다시 눌러주세요.")
@@ -92,22 +78,46 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
 
         _selectedAccount.value = accountNumber
 
-        // 💡 핵심 방어 로직: 숫자로만 이루어져 있고, 정확히 10자리 또는 11자리인 경우만 통과
-        // "555040835"(9자리) 처럼 불완전한 번호는 서버에 가지도 못하고 즉시 에러 처리됨
         if (!accountNumber.all { it.isDigit() } || accountNumber.length !in 10..11) {
             _uiState.value = UiState.Error("조회할 수 없는 계좌입니다.\n계좌번호를 다시 확인해 주세요.")
             return
         }
 
-        val token = tokenManager.getAccessToken(currentUid)
+        val accountInfo = tokenManager.getCredentialsForAccount(currentUid, accountNumber)
+        if (accountInfo == null || accountInfo.appKey.isEmpty() || accountInfo.secretKey.isEmpty()) {
+            _uiState.value = UiState.Error("[$accountNumber] 계좌에 대한 앱키 설정이 누락되었습니다.")
+            return
+        }
+
+        val token = tokenManager.getAccessToken(currentUid, accountNumber)
+
         if (!token.isNullOrEmpty()) {
-            fetchBalance(accountNumber, token)
+            fetchBalance(currentUid, accountNumber, token)
         } else {
-            _uiState.value = UiState.Error("토큰이 만료되었거나 없습니다. 다시 시도해주세요.")
+            issueAccessTokenAndFetch(currentUid, accountInfo.appKey, accountInfo.secretKey, accountNumber)
         }
     }
 
-    private fun fetchBalance(accountNumber: String, token: String) {
+    private fun issueAccessTokenAndFetch(uid: String, appKey: String, appSecret: String, targetAccount: String) {
+        fetchJob?.cancel()
+        fetchJob = viewModelScope.launch {
+            _uiState.value = UiState.Loading
+            try {
+                val response = RetrofitClient.lsApi.getAccessToken(appKey = appKey, appSecretKey = appSecret)
+                if (response.isSuccessful && response.body() != null) {
+                    val token = response.body()!!.accessToken
+                    tokenManager.saveAccessToken(uid, targetAccount, token)
+                    fetchBalance(uid, targetAccount, token)
+                } else {
+                    _uiState.value = UiState.Error("[$targetAccount]\n토큰 발급 실패 (앱키/시크릿키를 확인하세요)")
+                }
+            } catch (e: Exception) {
+                _uiState.value = UiState.Error("[$targetAccount]\n네트워크 오류: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    private fun fetchBalance(uid: String, accountNumber: String, token: String) {
         fetchJob?.cancel()
         fetchJob = viewModelScope.launch {
             _uiState.value = UiState.Loading
@@ -129,12 +139,17 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                     try {
                         val jsonObj = JSONObject(errorStr)
                         parsedMsg = jsonObj.optString("rsp_msg", "조회에 실패했습니다.")
-                    } catch (e: Exception) {
+                    } catch (e: Exception) {}
+
+                    if (response.code() == 401 || parsedMsg.contains("만료") || parsedMsg.contains("유효하지 않")) {
+                        tokenManager.clearAccessToken(uid, accountNumber)
+                        _uiState.value = UiState.Error("[$accountNumber]\n토큰이 만료되었습니다. 다시 탭을 눌러주세요.")
+                    } else {
+                        _uiState.value = UiState.Error("[$accountNumber] 잔고 조회 실패:\n$parsedMsg")
                     }
-                    _uiState.value = UiState.Error("잔고 조회 실패:\n$parsedMsg")
                 }
             } catch (e: Exception) {
-                _uiState.value = UiState.Error("통신 오류: ${e.localizedMessage}")
+                _uiState.value = UiState.Error("[$accountNumber]\n통신 오류: ${e.localizedMessage}")
             }
         }
     }

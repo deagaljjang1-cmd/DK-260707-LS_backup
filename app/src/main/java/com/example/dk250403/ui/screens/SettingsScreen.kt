@@ -48,6 +48,78 @@ import com.google.firebase.firestore.SetOptions
 import com.google.firebase.storage.FirebaseStorage
 
 @Composable
+fun AccountSlotInputGroup(
+    slotTitle: String,
+    accInput: String, onAccChange: (String) -> Unit, isAccVisible: Boolean, onAccToggle: () -> Unit,
+    appKeyInput: String, onAppKeyChange: (String) -> Unit, isAppKeyVisible: Boolean, onAppKeyToggle: () -> Unit,
+    secretKeyInput: String, onSecretKeyChange: (String) -> Unit, isSecretKeyVisible: Boolean, onSecretKeyToggle: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().background(ColorSurfaceVariant, RoundedCornerShape(8.dp)).padding(12.dp)) {
+        Text(slotTitle, color = ColorTextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedTextField(
+            value = accInput, onValueChange = onAccChange, modifier = Modifier.fillMaxWidth(), singleLine = true,
+            label = { Text("계좌번호 (숫자만 입력)", fontSize = 12.sp) },
+            visualTransformation = if (isAccVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = ColorTextPrimary, unfocusedTextColor = ColorTextPrimary,
+                focusedBorderColor = ColorStatus, unfocusedBorderColor = Color.Transparent,
+                focusedLabelColor = ColorTextPrimary, unfocusedLabelColor = ColorTextPrimary
+            ),
+            trailingIcon = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (accInput.isNotEmpty()) {
+                        IconButton(onClick = { onAccChange("") }) { Icon(Icons.Default.Clear, contentDescription = "전체 삭제", tint = ColorTextSecondary) }
+                    }
+                    IconButton(onClick = onAccToggle) { Icon(imageVector = if (isAccVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, contentDescription = "토글", tint = ColorTextSecondary) }
+                }
+            }
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = appKeyInput, onValueChange = onAppKeyChange, modifier = Modifier.fillMaxWidth(), singleLine = true,
+            label = { Text("앱키(App Key)", fontSize = 12.sp) },
+            visualTransformation = if (isAppKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = ColorTextPrimary, unfocusedTextColor = ColorTextPrimary,
+                focusedBorderColor = ColorStatus, unfocusedBorderColor = Color.Transparent,
+                focusedLabelColor = ColorTextPrimary, unfocusedLabelColor = ColorTextPrimary
+            ),
+            trailingIcon = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (appKeyInput.isNotEmpty()) {
+                        IconButton(onClick = { onAppKeyChange("") }) { Icon(Icons.Default.Clear, contentDescription = "전체 삭제", tint = ColorTextSecondary) }
+                    }
+                    IconButton(onClick = onAppKeyToggle) { Icon(imageVector = if (isAppKeyVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, contentDescription = "토글", tint = ColorTextSecondary) }
+                }
+            }
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = secretKeyInput, onValueChange = onSecretKeyChange, modifier = Modifier.fillMaxWidth(), singleLine = true,
+            label = { Text("시크릿키(Secret Key)", fontSize = 12.sp) },
+            visualTransformation = if (isSecretKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = ColorTextPrimary, unfocusedTextColor = ColorTextPrimary,
+                focusedBorderColor = ColorStatus, unfocusedBorderColor = Color.Transparent,
+                focusedLabelColor = ColorTextPrimary, unfocusedLabelColor = ColorTextPrimary
+            ),
+            trailingIcon = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (secretKeyInput.isNotEmpty()) {
+                        IconButton(onClick = { onSecretKeyChange("") }) { Icon(Icons.Default.Clear, contentDescription = "전체 삭제", tint = ColorTextSecondary) }
+                    }
+                    IconButton(onClick = onSecretKeyToggle) { Icon(imageVector = if (isSecretKeyVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, contentDescription = "토글", tint = ColorTextSecondary) }
+                }
+            }
+        )
+    }
+}
+
+@Composable
 fun SettingsScreen(
     modifier: Modifier = Modifier, initialNickname: String, initialProfileUrl: String, isPremium: Boolean,
     onProfileSaved: (String, String?) -> Unit, onBack: () -> Unit, onLogout: () -> Unit
@@ -58,7 +130,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     val clipboardManager = LocalClipboardManager.current
 
-    val tokenManager = remember { TokenManager(context) }
+    val tokenManager = remember { TokenManager.getInstance(context) }
     val uid = auth.currentUser?.uid ?: ""
 
     var tempNickname by remember { mutableStateOf(initialNickname) }
@@ -68,32 +140,39 @@ fun SettingsScreen(
     var isSavingInProgress by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var isDeletingAccount by remember { mutableStateOf(false) }
-    val bannedWords = listOf("관리자", "운영자", "admin", "system", "root", "운영진")
 
-    // 오픈 API 키 및 계좌 설정 다이얼로그 상태 변수
     var showApiDialog by remember { mutableStateOf(false) }
-    var appKeyInput by remember { mutableStateOf("") }
-    var secretKeyInput by remember { mutableStateOf("") }
-    var isAppKeyVisible by remember { mutableStateOf(false) }
-    var isSecretKeyVisible by remember { mutableStateOf(false) }
 
     var acc1Input by remember { mutableStateOf("") }
+    var appKey1Input by remember { mutableStateOf("") }
+    var secretKey1Input by remember { mutableStateOf("") }
+    var isAcc1Vis by remember { mutableStateOf(false) }
+    var isApp1Vis by remember { mutableStateOf(false) }
+    var isSec1Vis by remember { mutableStateOf(false) }
+
     var acc2Input by remember { mutableStateOf("") }
+    var appKey2Input by remember { mutableStateOf("") }
+    var secretKey2Input by remember { mutableStateOf("") }
+    var isAcc2Vis by remember { mutableStateOf(false) }
+    var isApp2Vis by remember { mutableStateOf(false) }
+    var isSec2Vis by remember { mutableStateOf(false) }
+
     var acc3Input by remember { mutableStateOf("") }
-    // 💡 계좌번호 마스킹 처리용 상태 변수 추가
-    var isAcc1Visible by remember { mutableStateOf(false) }
-    var isAcc2Visible by remember { mutableStateOf(false) }
-    var isAcc3Visible by remember { mutableStateOf(false) }
+    var appKey3Input by remember { mutableStateOf("") }
+    var secretKey3Input by remember { mutableStateOf("") }
+    var isAcc3Vis by remember { mutableStateOf(false) }
+    var isApp3Vis by remember { mutableStateOf(false) }
+    var isSec3Vis by remember { mutableStateOf(false) }
 
     androidx.activity.compose.BackHandler { onBack() }
 
     val nicknameError by remember(tempNickname) {
         derivedStateOf {
             if (tempNickname.contains(" ")) "❌ 띄어쓰기(공백)는 사용할 수 없습니다."
-            else if (tempNickname.isNotEmpty() && !Regex("^[가-힣a-zA-Z0-9_\\[\\]-]+$").matches(tempNickname)) "❌ 한글, 영문, 숫자, 기호(-, _, [, ])만 가능합니다."
+            else if (tempNickname.isNotEmpty() && !NICKNAME_REGEX.matches(tempNickname)) "❌ 한글, 영문, 숫자, 기호(-, _, [, ])만 가능합니다."
             else if (tempNickname.isNotEmpty() && (tempNickname.length < 2 || tempNickname.length > 12)) "❌ 닉네임은 2자 이상 12자 이하로 입력해 주세요."
             else {
-                val foundBannedWord = bannedWords.find { tempNickname.contains(it, ignoreCase = true) }
+                val foundBannedWord = BANNED_WORDS.find { tempNickname.contains(it, ignoreCase = true) }
                 if (foundBannedWord != null) "❌ [$foundBannedWord]는 닉네임으로 사용할 수 없습니다." else null
             }
         }
@@ -103,7 +182,15 @@ fun SettingsScreen(
         if (result.isSuccessful) localPreviewUri = result.uriContent else Toast.makeText(context, "편집 취소됨", Toast.LENGTH_SHORT).show()
     }
     val galleryLauncher = rememberLauncherForActivityResult(contract = ActivityResultContracts.GetContent()) { uri: Uri? ->
-        if (uri != null) cropLauncher.launch(CropImageContractOptions(uri = uri, cropImageOptions = CropImageOptions().apply { fixAspectRatio = true; aspectRatioX = 1; aspectRatioY = 1 }))
+        if (uri != null) {
+            cropLauncher.launch(CropImageContractOptions(uri = uri, cropImageOptions = CropImageOptions().apply {
+                fixAspectRatio = true
+                aspectRatioX = 1
+                aspectRatioY = 1
+                maxCropResultWidth = 500
+                maxCropResultHeight = 500
+            }))
+        }
     }
 
     if (showDeleteDialog) {
@@ -116,6 +203,10 @@ fun SettingsScreen(
                 TextButton(onClick = {
                     showDeleteDialog = false
                     isDeletingAccount = true
+
+                    // 💡 핵심 보안 조치: 파이어베이스 삭제 전에 기기 금고 데이터 완벽 초기화
+                    tokenManager.clearAllUserData(uid)
+
                     db.collection("users").document(uid).delete().addOnCompleteListener {
                         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN).build()
                         GoogleSignIn.getClient(context, gso).revokeAccess().addOnCompleteListener {
@@ -136,7 +227,7 @@ fun SettingsScreen(
         AlertDialog(
             containerColor = ColorSurface,
             onDismissRequest = { showApiDialog = false },
-            title = { Text("LS증권 오픈API 키 설정", fontWeight = FontWeight.Bold, color = ColorTextPrimary, fontSize = 18.sp) },
+            title = { Text("오픈API 계좌 연동", fontWeight = FontWeight.Bold, color = ColorTextPrimary, fontSize = 18.sp) },
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
@@ -149,98 +240,30 @@ fun SettingsScreen(
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://m.xn--6j1bp61aksejsj.com/page/dantetram.html"))
                                 context.startActivity(intent)
                             }
-                            .padding(vertical = 8.dp)
+                            .padding(bottom = 16.dp)
+                    )
+
+                    AccountSlotInputGroup(
+                        slotTitle = "계좌 슬롯 1 (주계좌)",
+                        accInput = acc1Input, onAccChange = { acc1Input = it }, isAccVisible = isAcc1Vis, onAccToggle = { isAcc1Vis = !isAcc1Vis },
+                        appKeyInput = appKey1Input, onAppKeyChange = { appKey1Input = it }, isAppKeyVisible = isApp1Vis, onAppKeyToggle = { isApp1Vis = !isApp1Vis },
+                        secretKeyInput = secretKey1Input, onSecretKeyChange = { secretKey1Input = it }, isSecretKeyVisible = isSec1Vis, onSecretKeyToggle = { isSec1Vis = !isSec1Vis }
                     )
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    Text("앱 키(App key)", color = ColorTextSecondary, fontSize = 12.sp)
-                    OutlinedTextField(
-                        value = appKeyInput,
-                        onValueChange = { appKeyInput = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        visualTransformation = if (isAppKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = ColorTextPrimary, unfocusedTextColor = ColorTextPrimary,
-                            focusedBorderColor = ColorStatus, unfocusedBorderColor = ColorSurfaceVariant
-                        ),
-                        trailingIcon = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (appKeyInput.isNotEmpty()) IconButton(onClick = { appKeyInput = "" }) { Icon(Icons.Default.Clear, contentDescription = "지우기", tint = ColorTextSecondary) }
-                                IconButton(onClick = { isAppKeyVisible = !isAppKeyVisible }) { Icon(imageVector = if (isAppKeyVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, contentDescription = "토글", tint = ColorTextSecondary) }
-                            }
-                        }
+                    AccountSlotInputGroup(
+                        slotTitle = "계좌 슬롯 2",
+                        accInput = acc2Input, onAccChange = { acc2Input = it }, isAccVisible = isAcc2Vis, onAccToggle = { isAcc2Vis = !isAcc2Vis },
+                        appKeyInput = appKey2Input, onAppKeyChange = { appKey2Input = it }, isAppKeyVisible = isApp2Vis, onAppKeyToggle = { isApp2Vis = !isApp2Vis },
+                        secretKeyInput = secretKey2Input, onSecretKeyChange = { secretKey2Input = it }, isSecretKeyVisible = isSec2Vis, onSecretKeyToggle = { isSec2Vis = !isSec2Vis }
                     )
-
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("시크릿 키(Secret Key)", color = ColorTextSecondary, fontSize = 12.sp)
-                    OutlinedTextField(
-                        value = secretKeyInput,
-                        onValueChange = { secretKeyInput = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        visualTransformation = if (isSecretKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = ColorTextPrimary, unfocusedTextColor = ColorTextPrimary,
-                            focusedBorderColor = ColorStatus, unfocusedBorderColor = ColorSurfaceVariant
-                        ),
-                        trailingIcon = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (secretKeyInput.isNotEmpty()) IconButton(onClick = { secretKeyInput = "" }) { Icon(Icons.Default.Clear, contentDescription = "지우기", tint = ColorTextSecondary) }
-                                IconButton(onClick = { isSecretKeyVisible = !isSecretKeyVisible }) { Icon(imageVector = if (isSecretKeyVisible) Icons.Default.Visibility else Icons.Default.VisibilityOff, contentDescription = "토글", tint = ColorTextSecondary) }
-                            }
-                        }
-                    )
-
-                    Spacer(modifier = Modifier.height(24.dp))
-                    HorizontalDivider(color = ColorSurfaceVariant)
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    Text("연동할 계좌번호 (숫자만 입력)", color = ColorTextSecondary, fontSize = 12.sp)
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // 💡 계좌번호 1 (마스킹/삭제 기능 추가)
-                    OutlinedTextField(
-                        value = acc1Input, onValueChange = { acc1Input = it }, modifier = Modifier.fillMaxWidth(),
-                        singleLine = true, placeholder = { Text("계좌번호 1 (주계좌)", color = ColorTextSecondary) },
-                        visualTransformation = if (isAcc1Visible) VisualTransformation.None else PasswordVisualTransformation(),
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = ColorTextPrimary, unfocusedTextColor = ColorTextPrimary, focusedBorderColor = ColorStatus, unfocusedBorderColor = ColorSurfaceVariant),
-                        trailingIcon = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (acc1Input.isNotEmpty()) IconButton(onClick = { acc1Input = "" }) { Icon(Icons.Default.Clear, contentDescription = "지우기", tint = ColorTextSecondary) }
-                                IconButton(onClick = { isAcc1Visible = !isAcc1Visible }) { Icon(imageVector = if (isAcc1Visible) Icons.Default.Visibility else Icons.Default.VisibilityOff, contentDescription = "토글", tint = ColorTextSecondary) }
-                            }
-                        }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // 💡 계좌번호 2 (마스킹/삭제 기능 추가)
-                    OutlinedTextField(
-                        value = acc2Input, onValueChange = { acc2Input = it }, modifier = Modifier.fillMaxWidth(),
-                        singleLine = true, placeholder = { Text("계좌번호 2 (선택)", color = ColorTextSecondary) },
-                        visualTransformation = if (isAcc2Visible) VisualTransformation.None else PasswordVisualTransformation(),
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = ColorTextPrimary, unfocusedTextColor = ColorTextPrimary, focusedBorderColor = ColorStatus, unfocusedBorderColor = ColorSurfaceVariant),
-                        trailingIcon = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (acc2Input.isNotEmpty()) IconButton(onClick = { acc2Input = "" }) { Icon(Icons.Default.Clear, contentDescription = "지우기", tint = ColorTextSecondary) }
-                                IconButton(onClick = { isAcc2Visible = !isAcc2Visible }) { Icon(imageVector = if (isAcc2Visible) Icons.Default.Visibility else Icons.Default.VisibilityOff, contentDescription = "토글", tint = ColorTextSecondary) }
-                            }
-                        }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // 💡 계좌번호 3 (마스킹/삭제 기능 추가)
-                    OutlinedTextField(
-                        value = acc3Input, onValueChange = { acc3Input = it }, modifier = Modifier.fillMaxWidth(),
-                        singleLine = true, placeholder = { Text("계좌번호 3 (선택)", color = ColorTextSecondary) },
-                        visualTransformation = if (isAcc3Visible) VisualTransformation.None else PasswordVisualTransformation(),
-                        colors = OutlinedTextFieldDefaults.colors(focusedTextColor = ColorTextPrimary, unfocusedTextColor = ColorTextPrimary, focusedBorderColor = ColorStatus, unfocusedBorderColor = ColorSurfaceVariant),
-                        trailingIcon = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (acc3Input.isNotEmpty()) IconButton(onClick = { acc3Input = "" }) { Icon(Icons.Default.Clear, contentDescription = "지우기", tint = ColorTextSecondary) }
-                                IconButton(onClick = { isAcc3Visible = !isAcc3Visible }) { Icon(imageVector = if (isAcc3Visible) Icons.Default.Visibility else Icons.Default.VisibilityOff, contentDescription = "토글", tint = ColorTextSecondary) }
-                            }
-                        }
+                    AccountSlotInputGroup(
+                        slotTitle = "계좌 슬롯 3",
+                        accInput = acc3Input, onAccChange = { acc3Input = it }, isAccVisible = isAcc3Vis, onAccToggle = { isAcc3Vis = !isAcc3Vis },
+                        appKeyInput = appKey3Input, onAppKeyChange = { appKey3Input = it }, isAppKeyVisible = isApp3Vis, onAppKeyToggle = { isApp3Vis = !isApp3Vis },
+                        secretKeyInput = secretKey3Input, onSecretKeyChange = { secretKey3Input = it }, isSecretKeyVisible = isSec3Vis, onSecretKeyToggle = { isSec3Vis = !isSec3Vis }
                     )
 
                     Spacer(modifier = Modifier.height(16.dp))
@@ -250,31 +273,44 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val acc1 = acc1Input.trim()
-                        val acc2 = acc2Input.trim()
-                        val acc3 = acc3Input.trim()
+                        val slots = listOf(
+                            Triple(acc1Input.trim(), appKey1Input.trim(), secretKey1Input.trim()),
+                            Triple(acc2Input.trim(), appKey2Input.trim(), secretKey2Input.trim()),
+                            Triple(acc3Input.trim(), appKey3Input.trim(), secretKey3Input.trim())
+                        )
 
-                        // 💡 중복 계좌 검사 로직 (빈 칸은 제외하고, 남은 값들 중 중복이 있는지 확인)
-                        val enteredAccounts = listOf(acc1, acc2, acc3).filter { it.isNotEmpty() }
-                        if (enteredAccounts.size != enteredAccounts.toSet().size) {
-                            Toast.makeText(context, "⚠️ 동일한 계좌번호가 중복으로 입력되었습니다.", Toast.LENGTH_SHORT).show()
-                            return@TextButton // 저장하지 않고 로직 중단
+                        val validAccounts = mutableListOf<String>()
+
+                        for ((acc, appKey, secKey) in slots) {
+                            if (acc.isNotEmpty()) {
+                                if (appKey.isEmpty() || secKey.isEmpty()) {
+                                    Toast.makeText(context, "⚠️ 계좌를 입력한 슬롯은 앱키와 시크릿키를 모두 입력해야 합니다.", Toast.LENGTH_LONG).show()
+                                    return@TextButton
+                                }
+                                validAccounts.add(acc)
+                            }
                         }
 
-                        tokenManager.saveAppCredentials(uid, appKeyInput.trim(), secretKeyInput.trim())
-                        tokenManager.saveAccountNumbers(uid, acc1, acc2, acc3)
+                        if (validAccounts.size != validAccounts.toSet().size) {
+                            Toast.makeText(context, "⚠️ 동일한 계좌번호가 중복으로 입력되었습니다.", Toast.LENGTH_SHORT).show()
+                            return@TextButton
+                        }
 
-                        // 💡 핵심 수정: 새로운 키/계좌를 저장할 때 기존(과거) 접근 토큰을 즉시 초기화(삭제)
-                        tokenManager.saveAccessToken(uid, "")
+                        tokenManager.saveAccountInfo(uid, 1, slots[0].first, slots[0].second, slots[0].third)
+                        tokenManager.clearAccessToken(uid, slots[0].first)
+
+                        tokenManager.saveAccountInfo(uid, 2, slots[1].first, slots[1].second, slots[1].third)
+                        tokenManager.clearAccessToken(uid, slots[1].first)
+
+                        tokenManager.saveAccountInfo(uid, 3, slots[2].first, slots[2].second, slots[2].third)
+                        tokenManager.clearAccessToken(uid, slots[2].first)
 
                         Toast.makeText(context, "앱키 및 계좌번호가 저장되었습니다.", Toast.LENGTH_SHORT).show()
                         showApiDialog = false
                     }
                 ) { Text("저장", color = ColorStatus, fontWeight = FontWeight.Bold) }
             },
-            dismissButton = {
-                TextButton(onClick = { showApiDialog = false }) { Text("취소", color = ColorTextSecondary) }
-            }
+            dismissButton = { TextButton(onClick = { showApiDialog = false }) { Text("취소", color = ColorTextSecondary) } }
         )
     }
 
@@ -307,18 +343,25 @@ fun SettingsScreen(
 
             Button(
                 onClick = {
-                    appKeyInput = tokenManager.getAppKey(uid) ?: ""
-                    secretKeyInput = tokenManager.getSecretKey(uid) ?: ""
-                    val accounts = tokenManager.getAccountNumbers(uid)
-                    acc1Input = accounts.getOrNull(0) ?: ""
-                    acc2Input = accounts.getOrNull(1) ?: ""
-                    acc3Input = accounts.getOrNull(2) ?: ""
+                    val accInfo1 = tokenManager.getAccountInfo(uid, 1)
+                    acc1Input = accInfo1?.accountNumber ?: ""
+                    appKey1Input = accInfo1?.appKey ?: ""
+                    secretKey1Input = accInfo1?.secretKey ?: ""
 
-                    isAppKeyVisible = false
-                    isSecretKeyVisible = false
-                    isAcc1Visible = false
-                    isAcc2Visible = false
-                    isAcc3Visible = false
+                    val accInfo2 = tokenManager.getAccountInfo(uid, 2)
+                    acc2Input = accInfo2?.accountNumber ?: ""
+                    appKey2Input = accInfo2?.appKey ?: ""
+                    secretKey2Input = accInfo2?.secretKey ?: ""
+
+                    val accInfo3 = tokenManager.getAccountInfo(uid, 3)
+                    acc3Input = accInfo3?.accountNumber ?: ""
+                    appKey3Input = accInfo3?.appKey ?: ""
+                    secretKey3Input = accInfo3?.secretKey ?: ""
+
+                    isAcc1Vis = false; isApp1Vis = false; isSec1Vis = false
+                    isAcc2Vis = false; isApp2Vis = false; isSec2Vis = false
+                    isAcc3Vis = false; isApp3Vis = false; isSec3Vis = false
+
                     showApiDialog = true
                 },
                 modifier = Modifier.align(Alignment.CenterHorizontally).height(40.dp),

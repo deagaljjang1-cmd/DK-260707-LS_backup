@@ -1,8 +1,8 @@
 package com.example.dk250403
 
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.provider.OpenableColumns
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -28,7 +28,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
 
-// --- 지정된 다크 테마 색상 팔레트 ---
+// 지정된 다크 테마 색상 팔레트
 val ColorBg = Color(0xFF0E1319)
 val ColorSurface = Color(0xFF202020)
 val ColorSurfaceVariant = Color(0xFF333333)
@@ -37,6 +37,10 @@ val ColorTextSecondary = Color(0xFF999999)
 val ColorUp = Color(0xFFFF3737)
 val ColorDown = Color(0xFF37C4FF)
 val ColorStatus = Color(0xFF39FF81)
+
+// 💡 정규식 및 금지어를 전역 상수로 분리하여 반복 컴파일 방지 (최적화)
+val NICKNAME_REGEX = Regex("^[가-힣a-zA-Z0-9_\\[\\]-]+$")
+val BANNED_WORDS = listOf("관리자", "운영자", "admin", "system", "root", "운영진")
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,30 +54,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             DK250403Theme {
-                Scaffold(
-                    modifier = Modifier.fillMaxSize(),
-                    containerColor = ColorBg
-                ) { innerPadding ->
+                Scaffold(modifier = Modifier.fillMaxSize(), containerColor = ColorBg) { innerPadding ->
                     AppNavigator(modifier = Modifier.padding(innerPadding))
                 }
             }
         }
     }
-}
-
-fun getFileSize(context: android.content.Context, uri: Uri): Long {
-    var size: Long = 0
-    try {
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-            if (sizeIndex != -1 && cursor.moveToFirst()) {
-                size = cursor.getLong(sizeIndex)
-            }
-        }
-    } catch (e: Exception) {
-        e.printStackTrace()
-    }
-    return size
 }
 
 // ------------------- 라우팅 (네비게이터) -------------------
@@ -91,8 +77,6 @@ fun AppNavigator(modifier: Modifier = Modifier) {
     var isCheckingUser by remember { mutableStateOf(false) }
     var startScreen by remember { mutableStateOf("MAIN") }
     var showForceLogoutDialog by remember { mutableStateOf(false) }
-
-    val bannedWords = listOf("관리자", "운영자", "admin", "system", "root", "운영진")
 
     // 기기 고유 ID 추출
     val currentDeviceId = remember { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) }
@@ -117,7 +101,7 @@ fun AppNavigator(modifier: Modifier = Modifier) {
             val uid = currentUser!!.uid
             val userRef = db.collection("users").document(uid)
 
-            // 1. 단발성 조회로 신규 가입 여부 확인 (리스너와 생성 로직 완벽 분리)
+            // 1. 단발성 조회로 신규 가입 여부 확인
             userRef.get().addOnSuccessListener { document ->
                 if (!document.exists()) {
                     // --- [신규 회원 가입] 구글 프로필 받아오기 ---
@@ -125,9 +109,10 @@ fun AppNavigator(modifier: Modifier = Modifier) {
                     val cleanedName = rawName.replace(" ", "")
 
                     var isValid = true
-                    if (!Regex("^[가-힣a-zA-Z0-9_\\[\\]-]+$").matches(cleanedName)) isValid = false
+                    // 💡 전역 상수화된 정규식 및 금지어 사용
+                    if (!NICKNAME_REGEX.matches(cleanedName)) isValid = false
                     if (cleanedName.length !in 2..12) isValid = false
-                    if (bannedWords.any { cleanedName.contains(it, ignoreCase = true) }) isValid = false
+                    if (BANNED_WORDS.any { cleanedName.contains(it, ignoreCase = true) }) isValid = false
 
                     val finalName = if (isValid) cleanedName else "투자자_${uid.take(4)}"
                     val targetScreen = if (isValid) "MAIN" else "SETTINGS"
@@ -153,9 +138,7 @@ fun AppNavigator(modifier: Modifier = Modifier) {
 
                         // 가입 완료 후 실시간 감시 시작
                         listener = userRef.addSnapshotListener { snapshot, e ->
-                            // 문서가 삭제되었으면(회원탈퇴) 재생성하지 않고 리스너 종료
                             if (e != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
-
                             globalNickname = snapshot.getString("nickname") ?: "투자자"
                             globalProfileUrl = snapshot.getString("profileImageUrl") ?: ""
                             globalIsPremium = snapshot.getBoolean("isPremium") ?: false
@@ -172,9 +155,7 @@ fun AppNavigator(modifier: Modifier = Modifier) {
 
                             // 기기 등록 완료 후 실시간 감시 시작
                             listener = userRef.addSnapshotListener { snapshot, e ->
-                                // 문서가 삭제되었으면(회원탈퇴) 재생성하지 않고 리스너 종료
                                 if (e != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
-
                                 globalNickname = snapshot.getString("nickname") ?: "투자자"
                                 globalProfileUrl = snapshot.getString("profileImageUrl") ?: ""
                                 globalIsPremium = snapshot.getBoolean("isPremium") ?: false
@@ -239,42 +220,20 @@ fun AppNavigator(modifier: Modifier = Modifier) {
 // ------------------- 메인 라우터 -------------------
 @Composable
 fun MainScreen(
-    modifier: Modifier = Modifier,
-    currentNickname: String,
-    currentProfileUrl: String,
-    isPremium: Boolean,
-    initialScreen: String,
-    onProfileSaved: (String, String?) -> Unit,
-    onCancelSettings: () -> Unit,
-    onLogout: () -> Unit
+    modifier: Modifier = Modifier, currentNickname: String, currentProfileUrl: String, isPremium: Boolean,
+    initialScreen: String, onProfileSaved: (String, String?) -> Unit, onCancelSettings: () -> Unit, onLogout: () -> Unit
 ) {
     var currentScreen by remember { mutableStateOf(initialScreen) }
 
-    LaunchedEffect(initialScreen) {
-        currentScreen = initialScreen
-    }
+    LaunchedEffect(initialScreen) { currentScreen = initialScreen }
 
     when (currentScreen) {
-        "MAIN" -> StockMainScreen(
-            modifier = modifier,
-            nickname = currentNickname,
-            profileUrl = currentProfileUrl,
-            isPremium = isPremium,
-            onNavigate = { screenName -> currentScreen = screenName },
-            onLogout = onLogout
-        )
+        "MAIN" -> StockMainScreen(modifier = modifier, nickname = currentNickname, profileUrl = currentProfileUrl, isPremium = isPremium, onNavigate = { screenName -> currentScreen = screenName }, onLogout = onLogout)
         "ASSETS" -> AssetsScreen(modifier = modifier, onBack = { currentScreen = "MAIN" })
         "SETTINGS" -> SettingsScreen(
             modifier = modifier, initialNickname = currentNickname, initialProfileUrl = currentProfileUrl, isPremium = isPremium,
-            onProfileSaved = { name, url ->
-                onProfileSaved(name, url)
-                currentScreen = "MAIN"
-            },
-            onBack = {
-                onCancelSettings()
-                currentScreen = "MAIN"
-            },
-            onLogout = onLogout
+            onProfileSaved = { name, url -> onProfileSaved(name, url); currentScreen = "MAIN" },
+            onBack = { onCancelSettings(); currentScreen = "MAIN" }, onLogout = onLogout
         )
     }
 }
