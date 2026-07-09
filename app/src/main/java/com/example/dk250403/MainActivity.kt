@@ -16,10 +16,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import com.example.dk250403.ui.screens.AssetsScreen
 import com.example.dk250403.ui.screens.LoginScreen
 import com.example.dk250403.ui.screens.SettingsScreen
 import com.example.dk250403.ui.screens.StockMainScreen
+import com.example.dk250403.ui.screens.TradingRoomScreen
 import com.example.dk250403.ui.theme.DK250403Theme
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
@@ -224,12 +226,30 @@ fun MainScreen(
     initialScreen: String, onProfileSaved: (String, String?) -> Unit, onCancelSettings: () -> Unit, onLogout: () -> Unit
 ) {
     var currentScreen by remember { mutableStateOf(initialScreen) }
+    var showLogoutDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(initialScreen) { currentScreen = initialScreen }
 
+    if (showLogoutDialog) {
+        AlertDialog(
+            containerColor = ColorSurface,
+            onDismissRequest = { showLogoutDialog = false },
+            title = { Text("로그아웃", fontWeight = FontWeight.Bold, color = ColorTextPrimary) },
+            text = { Text("정말 로그아웃 하시겠습니까?", color = ColorTextPrimary) },
+            confirmButton = { TextButton(onClick = { showLogoutDialog = false; onLogout() }) { Text("로그아웃", color = ColorUp, fontWeight = FontWeight.Bold) } },
+            dismissButton = { TextButton(onClick = { showLogoutDialog = false }) { Text("취소", color = ColorTextSecondary) } }
+        )
+    }
+
     when (currentScreen) {
-        "MAIN" -> StockMainScreen(modifier = modifier, nickname = currentNickname, profileUrl = currentProfileUrl, isPremium = isPremium, onNavigate = { screenName -> currentScreen = screenName }, onLogout = onLogout)
-        "ASSETS" -> AssetsScreen(modifier = modifier, onBack = { currentScreen = "MAIN" })
+        "MAIN" -> StockMainScreen(
+            modifier = modifier, nickname = currentNickname, profileUrl = currentProfileUrl, isPremium = isPremium,
+            onNavigate = { currentScreen = it }, onLogoutRequest = { showLogoutDialog = true }
+        )
+        "TRADING_ROOM" -> TradingRoomScreen(
+            modifier = modifier, nickname = currentNickname, profileUrl = currentProfileUrl, isPremium = isPremium,
+            onNavigate = { currentScreen = it }, onLogoutRequest = { showLogoutDialog = true }
+        )
         "SETTINGS" -> SettingsScreen(
             modifier = modifier, initialNickname = currentNickname, initialProfileUrl = currentProfileUrl, isPremium = isPremium,
             onProfileSaved = { name, url -> onProfileSaved(name, url); currentScreen = "MAIN" },
