@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Wallet
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.example.dk250403.ColorBg
 import com.example.dk250403.ColorSurface
 import com.example.dk250403.ColorStatus
@@ -49,7 +50,11 @@ fun TradingRoomScreen(
         bottomBar = {
             NavigationBar(
                 containerColor = ColorSurface,
-                contentColor = ColorTextPrimary
+                contentColor = ColorTextPrimary,
+                // 💡 추가 1: NavigationBar 자체의 하단 시스템 여백 계산을 무력화하여 이중 여백 방지
+                windowInsets = WindowInsets(10, 70, 10, 70),
+                // 💡 추가 2: 탭바 전체 높이를 슬림하게 고정 (너무 얇다면 70.dp 등으로 조절 가능)
+                modifier = Modifier.height(65.dp)
             ) {
                 NavigationBarItem(
                     selected = selectedTab == "WATCHLIST",

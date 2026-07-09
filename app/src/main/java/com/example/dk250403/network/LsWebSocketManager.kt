@@ -21,7 +21,6 @@ object LsWebSocketManager {
     private var currentToken: String = ""
 
     fun connect(token: String) {
-        Log.d("LsWebSocket", "👉 웹소켓 connect() 함수 진입! 토큰 유무: ${token.isNotEmpty()}")
         if (webSocket != null) return
         currentToken = token
 
@@ -34,19 +33,18 @@ object LsWebSocketManager {
                 activeSubscriptions.forEach { key ->
                     val parts = key.split("|")
                     if (parts.size == 2) {
-                        // 💡 재연결 시에도 구독(3)으로 전송
                         sendSubscription(parts[0], parts[1], "3")
                     }
                 }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                Log.d("LsWebSocket", "📩 서버 응답: $text")
+                // 💡 최적화: 초당 수십 번 쏟아지는 서버 응답 로그캣 스팸 방지를 위해 출력 제거
                 try {
                     val json = JSONObject(text)
                     _realtimeDataFlow.tryEmit(json)
                 } catch (e: Exception) {
-                    Log.e("LsWebSocket", "메시지 파싱 오류")
+                    Log.e("LsWebSocket", "메시지 파싱 오류: ${e.localizedMessage}")
                 }
             }
 
@@ -57,7 +55,7 @@ object LsWebSocketManager {
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.d("LsWebSocket", "정상 종료")
+                Log.d("LsWebSocket", "✅ 정상 종료")
                 this@LsWebSocketManager.webSocket = null
                 isReady = false
             }
@@ -75,7 +73,7 @@ object LsWebSocketManager {
         val key = "${trCd}|${trKey}"
         if (!activeSubscriptions.contains(key)) {
             activeSubscriptions.add(key)
-            sendSubscription(trCd, trKey, "3") // 💡 실시간 시세 등록(구독) Type: 3
+            sendSubscription(trCd, trKey, "3")
         }
     }
 
@@ -83,7 +81,7 @@ object LsWebSocketManager {
         val key = "${trCd}|${trKey}"
         if (activeSubscriptions.contains(key)) {
             activeSubscriptions.remove(key)
-            sendSubscription(trCd, trKey, "4") // 💡 실시간 시세 해지 Type: 4
+            sendSubscription(trCd, trKey, "4")
         }
     }
 
@@ -103,6 +101,7 @@ object LsWebSocketManager {
             put("body", body)
         }
 
+        // 구독 요청 및 해지 발생 시에만 확인 로그 출력
         Log.d("LsWebSocket", "🚀 구독 요청 전송: $trCd / $trKey / Type: $trType")
         webSocket?.send(requestJson.toString())
     }

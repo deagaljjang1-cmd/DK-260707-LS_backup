@@ -18,6 +18,16 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
+// 💡 1. 정렬 기준 Enum 추가
+enum class SortType {
+    NAME_ASC,        // 종목명 순 (가나다)
+    NAME_DESC,       // 종목명 내림차순
+    RETURN_DESC,     // 수익률 순 (높은 순)
+    RETURN_ASC,      // 수익률 오름차순 (낮은 순)
+    PROFIT_DESC,      // 수익금 순 (많은 순)
+    PROFIT_ASC       // 수익금 오름차순 (적은 순)
+}
+
 class AssetsViewModel(application: Application) : AndroidViewModel(application) {
     private val tokenManager = TokenManager.getInstance(application)
     private val auth = FirebaseAuth.getInstance()
@@ -31,10 +41,14 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
     private val _selectedAccount = MutableStateFlow<String>("")
     val selectedAccount: StateFlow<String> = _selectedAccount.asStateFlow()
 
+    // 💡 2. 현재 선택된 정렬 상태
+    private val _sortType = MutableStateFlow(SortType.NAME_ASC)
+    val sortType: StateFlow<SortType> = _sortType.asStateFlow()
+
     private var fetchJob: Job? = null
     private var lastRequestTime = 0L
 
-    private val subscribedCodes = mutableSetOf<String>() // 여기에는 순수 숫자 6자리 코드만 저장
+    private val subscribedCodes = mutableSetOf<String>()
 
     init {
         observeRealtimeWebSocket()
@@ -46,9 +60,8 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         _selectedAccount.value = ""
         fetchJob?.cancel()
 
-        // 💡 구독 해지 (US3 통합 채널)
         subscribedCodes.forEach { code ->
-            val trKey = "U$code   " // U + 6자리 + 공백3칸
+            val trKey = "U$code   "
             LsWebSocketManager.unsubscribe("US3", trKey)
         }
         subscribedCodes.clear()
@@ -56,22 +69,17 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
 
     fun initAssets() {
         val currentUid = auth.currentUser?.uid ?: ""
-
         if (currentUid.isEmpty()) {
             _uiState.value = UiState.Error("로그인 정보가 없습니다.")
             return
         }
-
         clearData()
-
         val accounts = tokenManager.getAccountNumbers(currentUid)
         _registeredAccounts.value = accounts
-
         if (accounts.isEmpty()) {
             _uiState.value = UiState.Error("등록된 계좌가 없습니다. 계정 설정에서 앱키와 계좌번호를 먼저 등록해주세요.")
             return
         }
-
         requestBalanceForAccount(accounts.first())
     }
 
@@ -85,7 +93,6 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
         lastRequestTime = currentTime
-
         _selectedAccount.value = accountNumber
 
         if (!accountNumber.all { it.isDigit() } || accountNumber.length !in 10..11) {
@@ -100,7 +107,6 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         }
 
         val token = tokenManager.getAccessToken(currentUid, accountNumber)
-
         if (!token.isNullOrEmpty()) {
             fetchBalance(currentUid, accountNumber, token)
         } else {
@@ -141,7 +147,9 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                         val errorMsg = if (body.rspMsg.isNotEmpty()) body.rspMsg else "해당 계좌는 조회가 되지 않습니다."
                         _uiState.value = UiState.Error("[$accountNumber]\n$errorMsg")
                     } else {
-                        _uiState.value = UiState.BalanceLoaded(body)
+                        // 💡 최초 조회 시점에 정렬 기준 적용
+                        val sortedHoldings = sortHoldings(body.holdings ?: emptyList(), _sortType.value)
+                        _uiState.value = UiState.BalanceLoaded(body.copy(holdings = sortedHoldings))
 
                         LsWebSocketManager.connect(token)
                         subscribeToHoldings(body.holdings ?: emptyList())
@@ -167,7 +175,33 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // 💡 수정: 통합 체결(US3) 규격에 맞추어 단축코드 7자리 + 공백 3자리 생성
+    // 💡 3. 정렬 상태 변경 함수
+    fun setSortType(type: SortType) {
+        _sortType.value = type
+        val currentState = _uiState.value
+        if (currentState is UiState.BalanceLoaded) {
+            val oldBalance = currentState.balance
+            val sortedHoldings = sortHoldings(oldBalance.holdings ?: emptyList(), type)
+            _uiState.value = UiState.BalanceLoaded(oldBalance.copy(holdings = sortedHoldings))
+        }
+    }
+
+    // 💡 4. 실제 정렬 처리 로직
+    private fun sortHoldings(holdings: List<StockHolding>, type: SortType): List<StockHolding> {
+        return when (type) {
+            SortType.NAME_ASC -> holdings.sortedBy { it.itemName }
+            SortType.NAME_DESC -> holdings.sortedByDescending { it.itemName }
+            SortType.RETURN_DESC -> holdings.sortedByDescending { it.returnRate }
+            SortType.RETURN_ASC -> holdings.sortedBy { it.returnRate }
+            SortType.PROFIT_DESC -> holdings.sortedByDescending {
+                (it.currentPrice - it.averagePrice) * it.quantity
+            }
+            SortType.PROFIT_ASC -> holdings.sortedBy { // 💡 오름차순 추가
+                (it.currentPrice - it.averagePrice) * it.quantity
+            }
+        }
+    }
+
     private fun subscribeToHoldings(holdings: List<StockHolding>) {
         subscribedCodes.forEach { code ->
             val trKey = "U$code   "
@@ -181,15 +215,8 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
             LsWebSocketManager.subscribe("US3", trKey)
             subscribedCodes.add(code)
         }
-
-        // 2. 🚨 통신망 검증을 위한 삼성전자 강제 구독 (코스피 체결)
-        //val testCode = "005930"
-        //val testtrKey = "U$testCode   "
-        //LsWebSocketManager.subscribe("US3", testtrKey)
-        //subscribedCodes.add(testCode)
     }
 
-    // 💡 수정: US3 데이터 수신 및 종목 코드 안전 추출
     private fun observeRealtimeWebSocket() {
         viewModelScope.launch {
             LsWebSocketManager.realtimeDataFlow.collect { json ->
@@ -201,12 +228,9 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                         if (header != null && body != null) {
                             val trCd = header.optString("tr_cd")
 
-                            // 통합 체결 데이터 채널인 경우에만 처리
                             if (trCd == "US3") {
-                                val rawStockCode = body.optString("shcode") // 서버에서 U058730 혹은 기타 형태로 내려올 수 있음
+                                val rawStockCode = body.optString("shcode")
                                 val currentPriceStr = body.optString("price")
-
-                                // 숫자만 추출하여 뒷 6자리로 종목 코드 정규화
                                 val stockCode = rawStockCode.filter { it.isDigit() }.takeLast(6)
 
                                 if (stockCode.isNotEmpty() && currentPriceStr.isNotEmpty()) {
@@ -221,11 +245,14 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // 💡 5. 총자산 실시간 계산 및 자동 정렬 적용
     private fun updateStockPrice(currentState: UiState.BalanceLoaded, stockCode: String, newPrice: Long) {
         val oldBalance = currentState.balance
         val oldHoldings = oldBalance.holdings ?: return
 
         var isChanged = false
+        var newTotalHoldingsValue = 0L // 보유 주식의 총 평가금액
+
         val newHoldings = oldHoldings.map { stock ->
             if (stock.itemCode.takeLast(6) == stockCode && stock.currentPrice != newPrice) {
                 isChanged = true
@@ -236,14 +263,37 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                     stock.returnRate
                 }
 
-                stock.copy(currentPrice = newPrice, returnRate = returnRate)
+                val updatedStock = stock.copy(currentPrice = newPrice, returnRate = returnRate)
+                newTotalHoldingsValue += (updatedStock.currentPrice * updatedStock.quantity)
+                updatedStock
             } else {
+                newTotalHoldingsValue += (stock.currentPrice * stock.quantity)
                 stock
             }
         }
 
         if (isChanged) {
-            val newBalance = oldBalance.copy(holdings = newHoldings)
+            val sortedHoldings = sortHoldings(newHoldings, _sortType.value)
+
+            val oldSummary = oldBalance.summary
+
+            // 💡 1. 기존 보유 주식들의 총 평가금액 계산
+            val oldTotalHoldingsValue = oldHoldings.sumOf { it.currentPrice * it.quantity }
+
+            // 💡 2. 기존 추정 순자산에서 기존 주식 평가금액을 빼서 '순수 예수금(현금)' 역산
+            val cashBalance = (oldSummary?.totalEvaluationAmount ?: 0L) - oldTotalHoldingsValue
+
+            // 💡 3. 새로운 추정 순자산 = 역산한 예수금 + 새로운 주식 총 평가금액
+            val newTotalEvaluationAmount = cashBalance + newTotalHoldingsValue
+
+            val newSummary = oldSummary?.copy(
+                totalEvaluationAmount = newTotalEvaluationAmount
+            )
+
+            val newBalance = oldBalance.copy(
+                holdings = sortedHoldings,
+                summary = newSummary
+            )
             _uiState.value = UiState.BalanceLoaded(newBalance)
         }
     }
