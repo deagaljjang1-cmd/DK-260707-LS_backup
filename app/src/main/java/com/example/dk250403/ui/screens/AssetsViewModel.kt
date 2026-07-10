@@ -231,14 +231,28 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                             if (trCd == "US3") {
                                 val rawStockCode = body.optString("shcode")
                                 val currentPriceStr = body.optString("price")
+                                val changeRateStr = body.optString("drate")
+                                // 💡 추가: LS웹소켓에서 부호와 전일대비금액 추출
+                                val signStr = body.optString("sign")
+                                val changeStr = body.optString("change")
                                 val stockCode = rawStockCode.filter { it.isDigit() }.takeLast(6)
 
                                 if (stockCode.isNotEmpty() && currentPriceStr.isNotEmpty()) {
                                     val newPrice = currentPriceStr.replace(",", "").toLongOrNull() ?: return@collect
-                                    updateStockPrice(currentState, stockCode, newPrice)
+                                    val newChangeRate = changeRateStr.replace(",", "").toDoubleOrNull() ?: 0.0
+                                    val changeAmt = changeStr.replace(",", "").toLongOrNull() ?: 0L
+
+                                    // 💡 부호(1,2:상승 / 4,5:하락)에 따라 정확한 전일종가 역산
+                                    val baseYesterdayPrice = when (signStr) {
+                                        "1", "2" -> newPrice - changeAmt
+                                        "4", "5" -> newPrice + changeAmt
+                                        else -> newPrice
+                                    }
+
+                                    // 💡 baseYesterdayPrice 파라미터 추가 전송
+                                    updateStockPrice(currentState, stockCode, newPrice, newChangeRate, baseYesterdayPrice)
                                 }
-                            }
-                        }
+                            }                        }
                     } catch (e: Exception) {}
                 }
             }
@@ -246,7 +260,13 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     // 💡 5. 총자산 실시간 계산 및 자동 정렬 적용
-    private fun updateStockPrice(currentState: UiState.BalanceLoaded, stockCode: String, newPrice: Long) {
+    private fun updateStockPrice(
+        currentState: UiState.BalanceLoaded,
+        stockCode: String,
+        newPrice: Long,
+        newChangeRate: Double,
+        baseYesterdayPrice: Long
+    ) {
         val oldBalance = currentState.balance
         val oldHoldings = oldBalance.holdings ?: return
 
@@ -263,7 +283,8 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                     stock.returnRate
                 }
 
-                val updatedStock = stock.copy(currentPrice = newPrice, returnRate = returnRate)
+                // 💡 수정 2: stock.copy 괄호 안에 todayChangeRate = newChangeRate 추가
+                val updatedStock = stock.copy(currentPrice = newPrice, returnRate = returnRate, todayChangeRate = newChangeRate, yesterdayPrice = baseYesterdayPrice)
                 newTotalHoldingsValue += (updatedStock.currentPrice * updatedStock.quantity)
                 updatedStock
             } else {

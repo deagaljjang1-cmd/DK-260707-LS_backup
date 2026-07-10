@@ -51,5 +51,7 @@ data class StockHolding(
     @SerializedName("janqty") val quantity: Long,              // 잔고수량
     @SerializedName("pamt") val averagePrice: Long,            // 평균단가
     @SerializedName("price") val currentPrice: Long,           // 현재가
-    @SerializedName("sunikrt") val returnRate: Double          // 수익률
+    @SerializedName("sunikrt") val returnRate: Double,         // 수익률
+    @SerializedName("drate") val todayChangeRate: Double = 0.0,     // 실시간 당일 등락률
+    val yesterdayPrice: Long = 0L  // 전일 종가(기준가)
 )
