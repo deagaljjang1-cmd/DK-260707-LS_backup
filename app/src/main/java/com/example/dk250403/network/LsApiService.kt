@@ -27,4 +27,15 @@ interface LsApiService {
         @Header("mac_address") macAddress: String = "",
         @Body request: BalanceRequest
     ): Response<BalanceResponse>
+
+    // 💡 [t1102] 주식 현재가 단건 시세 조회
+    @POST("/stock/market-data") // LS증권 실서버 엔드포인트에 맞게 경로 확인 필요
+    suspend fun getStockCurrentPrice(
+        @Header("authorization") token: String,
+        @Header("tr_cd") trCd: String = "t1102",
+        @Header("tr_cont") trCont: String = "N",
+        @Header("tr_cont_key") trContKey: String = "",
+        @Header("mac_address") macAddress: String = "",
+        @Body request: T1102Request
+    ): Response<T1102Response>
 }

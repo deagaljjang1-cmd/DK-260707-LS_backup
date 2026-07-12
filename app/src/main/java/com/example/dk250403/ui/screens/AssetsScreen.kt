@@ -181,7 +181,9 @@ fun AssetsScreen(
             }
         }
 
-        // 💡 바텀 시트 호출 영역 (실시간 데이터 참조로 구조 변경)
+        // 💡 부모 화면 상단에 시간 Flow를 관찰하는 변수 추가 (상태바 시계에도 동일하게 적용)
+        val currentTime by viewModel.realTimeClock.collectAsState()
+
         val latestStock = if (uiState is AssetsViewModel.UiState.BalanceLoaded) {
             (uiState as AssetsViewModel.UiState.BalanceLoaded).balance.holdings?.find { it.itemCode == selectedStockCodeForOrder }
         } else null
@@ -199,17 +201,20 @@ fun AssetsScreen(
                 stockCode = stock.itemCode,
                 currentPrice = stock.currentPrice,
                 todayChangeRate = stock.todayChangeRate,
-                yesterdayPrice = stock.yesterdayPrice, // 💡 추가됨
+                yesterdayPrice = stock.yesterdayPrice,
                 availableCash = cashBalance,
                 holdingQuantity = stock.quantity,
                 onDismiss = { selectedStockCodeForOrder = null },
-                onOrderSubmit = { tradeType, orderType, price, quantity ->
+                onOrderSubmit = { tradeType, orderType, price, quantity, market ->
                     pendingTradeType = tradeType
                     pendingOrderType = orderType
                     pendingPrice = price
                     pendingQuantity = quantity
+                    // pendingMarket = market // 추후 사용
                     showConfirmDialog = true
-                }
+                },
+                onFetchInitialPrice = { viewModel.fetchInitialPrice(it) },
+                realTimeMillis = currentTime // 💡 실시간 타이머 변수 주입!
             )
         }
 

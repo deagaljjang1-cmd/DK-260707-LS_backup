@@ -55,3 +55,30 @@ data class StockHolding(
     @SerializedName("drate") val todayChangeRate: Double = 0.0,     // 실시간 당일 등락률
     val yesterdayPrice: Long = 0L  // 전일 종가(기준가)
 )
+
+// ==========================================
+// [t1102] 주식 현재가 단건 시세 조회 모델
+// ==========================================
+
+data class T1102Request(
+    val t1102InBlock: T1102InBlock
+)
+
+data class T1102InBlock(
+    val shcode: String,
+    val exchgubun: String = "U" // 기본값 'U' (통합) 세팅
+)
+
+data class T1102Response(
+    val rsp_cd: String?,
+    val rsp_msg: String?,
+    val t1102OutBlock: T1102OutBlock?
+)
+
+data class T1102OutBlock(
+    val price: Long,         // 현재가 (종가)
+    val diff: Double,        // 등락률
+    val recprice: Long,      // 전일종가(기준가)
+    val uplmtprice: Long,    // 상한가
+    val dnlmtprice: Long     // 하한가
+)

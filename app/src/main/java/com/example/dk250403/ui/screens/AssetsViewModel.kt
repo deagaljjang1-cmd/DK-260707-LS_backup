@@ -12,9 +12,13 @@ import com.example.dk250403.network.T0424InBlock
 import com.example.dk250403.util.TokenManager
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 
@@ -44,6 +48,18 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
     // 💡 2. 현재 선택된 정렬 상태
     private val _sortType = MutableStateFlow(SortType.NAME_ASC)
     val sortType: StateFlow<SortType> = _sortType.asStateFlow()
+
+    // 💡 [새로운 마스터키] 메인 화면 상태바와 매매창 시간 통제를 위한 1초 주기 실시간 타이머
+    val realTimeClock: StateFlow<Long> = flow {
+        while (true) {
+            emit(System.currentTimeMillis())
+            delay(1000L) // 1초 대기
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Lazily,
+        initialValue = System.currentTimeMillis()
+    )
 
     private var fetchJob: Job? = null
     private var lastRequestTime = 0L
@@ -147,7 +163,6 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                         val errorMsg = if (body.rspMsg.isNotEmpty()) body.rspMsg else "해당 계좌는 조회가 되지 않습니다."
                         _uiState.value = UiState.Error("[$accountNumber]\n$errorMsg")
                     } else {
-                        // 💡 최초 조회 시점에 정렬 기준 적용
                         val sortedHoldings = sortHoldings(body.holdings ?: emptyList(), _sortType.value)
                         _uiState.value = UiState.BalanceLoaded(body.copy(holdings = sortedHoldings))
 
@@ -175,7 +190,6 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // 💡 3. 정렬 상태 변경 함수
     fun setSortType(type: SortType) {
         _sortType.value = type
         val currentState = _uiState.value
@@ -186,7 +200,6 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // 💡 4. 실제 정렬 처리 로직
     private fun sortHoldings(holdings: List<StockHolding>, type: SortType): List<StockHolding> {
         return when (type) {
             SortType.NAME_ASC -> holdings.sortedBy { it.itemName }
@@ -196,7 +209,7 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
             SortType.PROFIT_DESC -> holdings.sortedByDescending {
                 (it.currentPrice - it.averagePrice) * it.quantity
             }
-            SortType.PROFIT_ASC -> holdings.sortedBy { // 💡 오름차순 추가
+            SortType.PROFIT_ASC -> holdings.sortedBy {
                 (it.currentPrice - it.averagePrice) * it.quantity
             }
         }
@@ -232,7 +245,6 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                                 val rawStockCode = body.optString("shcode")
                                 val currentPriceStr = body.optString("price")
                                 val changeRateStr = body.optString("drate")
-                                // 💡 추가: LS웹소켓에서 부호와 전일대비금액 추출
                                 val signStr = body.optString("sign")
                                 val changeStr = body.optString("change")
                                 val stockCode = rawStockCode.filter { it.isDigit() }.takeLast(6)
@@ -242,24 +254,22 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                                     val newChangeRate = changeRateStr.replace(",", "").toDoubleOrNull() ?: 0.0
                                     val changeAmt = changeStr.replace(",", "").toLongOrNull() ?: 0L
 
-                                    // 💡 부호(1,2:상승 / 4,5:하락)에 따라 정확한 전일종가 역산
                                     val baseYesterdayPrice = when (signStr) {
                                         "1", "2" -> newPrice - changeAmt
                                         "4", "5" -> newPrice + changeAmt
                                         else -> newPrice
                                     }
 
-                                    // 💡 baseYesterdayPrice 파라미터 추가 전송
                                     updateStockPrice(currentState, stockCode, newPrice, newChangeRate, baseYesterdayPrice)
                                 }
-                            }                        }
+                            }
+                        }
                     } catch (e: Exception) {}
                 }
             }
         }
     }
 
-    // 💡 5. 총자산 실시간 계산 및 자동 정렬 적용
     private fun updateStockPrice(
         currentState: UiState.BalanceLoaded,
         stockCode: String,
@@ -271,7 +281,7 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         val oldHoldings = oldBalance.holdings ?: return
 
         var isChanged = false
-        var newTotalHoldingsValue = 0L // 보유 주식의 총 평가금액
+        var newTotalHoldingsValue = 0L
 
         val newHoldings = oldHoldings.map { stock ->
             if (stock.itemCode.takeLast(6) == stockCode && stock.currentPrice != newPrice) {
@@ -283,7 +293,6 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                     stock.returnRate
                 }
 
-                // 💡 수정 2: stock.copy 괄호 안에 todayChangeRate = newChangeRate 추가
                 val updatedStock = stock.copy(currentPrice = newPrice, returnRate = returnRate, todayChangeRate = newChangeRate, yesterdayPrice = baseYesterdayPrice)
                 newTotalHoldingsValue += (updatedStock.currentPrice * updatedStock.quantity)
                 updatedStock
@@ -295,16 +304,9 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
 
         if (isChanged) {
             val sortedHoldings = sortHoldings(newHoldings, _sortType.value)
-
             val oldSummary = oldBalance.summary
-
-            // 💡 1. 기존 보유 주식들의 총 평가금액 계산
             val oldTotalHoldingsValue = oldHoldings.sumOf { it.currentPrice * it.quantity }
-
-            // 💡 2. 기존 추정 순자산에서 기존 주식 평가금액을 빼서 '순수 예수금(현금)' 역산
             val cashBalance = (oldSummary?.totalEvaluationAmount ?: 0L) - oldTotalHoldingsValue
-
-            // 💡 3. 새로운 추정 순자산 = 역산한 예수금 + 새로운 주식 총 평가금액
             val newTotalEvaluationAmount = cashBalance + newTotalHoldingsValue
 
             val newSummary = oldSummary?.copy(
@@ -316,6 +318,42 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                 summary = newSummary
             )
             _uiState.value = UiState.BalanceLoaded(newBalance)
+        }
+    }
+
+    fun fetchInitialPrice(stockCode: String) {
+        val currentUid = auth.currentUser?.uid ?: return
+        val account = _selectedAccount.value
+        if (account.isEmpty()) return
+        val token = tokenManager.getAccessToken(currentUid, account) ?: return
+
+        viewModelScope.launch {
+            try {
+                val request = com.example.dk250403.network.T1102Request(
+                    com.example.dk250403.network.T1102InBlock(shcode = stockCode, exchgubun = "U")
+                )
+                val response = RetrofitClient.lsApi.getStockCurrentPrice(
+                    token = "Bearer $token",
+                    request = request
+                )
+
+                if (response.isSuccessful) {
+                    response.body()?.t1102OutBlock?.let { outBlock ->
+                        val currentState = _uiState.value
+                        if (currentState is UiState.BalanceLoaded) {
+                            updateStockPrice(
+                                currentState = currentState,
+                                stockCode = stockCode,
+                                newPrice = outBlock.price,
+                                newChangeRate = outBlock.diff,
+                                baseYesterdayPrice = outBlock.recprice
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
