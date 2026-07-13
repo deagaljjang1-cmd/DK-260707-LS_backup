@@ -35,7 +35,6 @@ import com.example.dk250403.ColorSurface
 import com.example.dk250403.ColorTextPrimary
 import com.example.dk250403.ColorTextSecondary
 import java.text.DecimalFormat
-import java.util.Calendar
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
@@ -75,22 +74,15 @@ fun calculatePriceByTick(basePrice: Long, ticks: Int): Long {
     return snapToValidTick(p)
 }
 
+// 💡 한국거래소(KRX) 상하한가 제한폭 절사 알고리즘
 fun getKrxLimitWidth(basePrice: Long): Long {
     val maxLimit = (basePrice * 0.3)
     val tickSize = getTickSize(basePrice)
+    // 기준가의 호가 단위 미만을 강제로 버림(절사) 처리
     return (maxLimit / tickSize).toLong() * tickSize
 }
 
-// 💡 파라미터로 넘어온 시간(ms)을 기준으로 정규장(09:00 ~ 15:30) 여부를 판별하는 유틸 함수
-fun isRegularMarketHours(timeMillis: Long): Boolean {
-    val calendar = Calendar.getInstance().apply { timeInMillis = timeMillis }
-    val hour = calendar.get(Calendar.HOUR_OF_DAY)
-    val minute = calendar.get(Calendar.MINUTE)
-    val timeInMinutes = hour * 60 + minute
-    // 09:00 = 540분 / 15:30 = 930분
-    return timeInMinutes in 540 until 930
-}
-
+// 💡 오터치 방지를 위한 안전 여백 및 내장형 상하 증감 버튼 컴포저블
 @Composable
 fun EmbeddedStepper(
     onUpClick: () -> Unit,
@@ -101,7 +93,9 @@ fun EmbeddedStepper(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.size(width = 60.dp, height = 48.dp)
     ) {
+        // 안전 여백 (숫자 클릭 시 오터치 방지)
         Spacer(modifier = Modifier.width(12.dp))
+        // 시각적 분리선
         Box(modifier = Modifier.width(1.dp).fillMaxHeight(0.7f).background(ColorSurface))
 
         Column(
@@ -136,76 +130,25 @@ fun OrderBottomSheet(
     availableCash: Long,
     holdingQuantity: Long,
     onDismiss: () -> Unit,
-    onOrderSubmit: (TradeType, OrderType, Long, Long, String) -> Unit,
-    onFetchInitialPrice: (String) -> Unit = {},
-    // 💡 뷰모델에서 흘러나오는 1초짜리 실시간 타이머를 주입받음
-    realTimeMillis: Long
+    onOrderSubmit: (TradeType, OrderType, Long, Long) -> Unit
 ) {
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val numberFormat = remember { DecimalFormat("#,###") }
 
-    LaunchedEffect(stockCode) {
-        onFetchInitialPrice(stockCode)
-    }
-
     val colorBuy = Color(0xFFFF3737)
     val colorSell = Color(0xFF37C4FF)
-    val colorPoint = Color(0xFF39FF81)
 
-    // 💡 1. 뷰모델의 타이머를 통해 현재 정규장인지 실시간으로 검사
-    val isRegularTime = isRegularMarketHours(realTimeMillis)
-
-    // 💡 2. 바텀시트가 열릴 때 시간대에 맞춰 기본 시장 자동 세팅
-    var selectedMarket by remember { mutableStateOf(if (isRegularTime) "KRX" else "NXT") }
-
-    // 💡 3. 매매창을 열어둔 상태로 오후 3시 30분이 넘어가면 강제로 NXT로 변경해주는 안전장치
-    LaunchedEffect(isRegularTime) {
-        if (!isRegularTime && selectedMarket == "KRX") {
-            selectedMarket = "NXT"
-        } else if (isRegularTime && selectedMarket == "NXT") {
-            selectedMarket = "KRX"
-        }
-    }
-
-    var tradeType by remember { mutableStateOf(if (holdingQuantity > 0) TradeType.SELL else TradeType.BUY) }
+    var tradeType by remember { mutableStateOf(TradeType.BUY) }
     var orderType by remember { mutableStateOf(OrderType.LIMIT) }
 
+    // 💡 실시간 추적을 폐기하고, 창이 열릴 때 한 번만 현재가로 초기화
     var priceValue by remember { mutableLongStateOf(currentPrice) }
-    var quantityValue by remember { mutableLongStateOf(if (holdingQuantity > 0) holdingQuantity else 0L) }
-    var totalAmountValue by remember { mutableLongStateOf(if (holdingQuantity > 0) currentPrice * holdingQuantity else 0L) }
-    var proportionText by remember { mutableStateOf(if (holdingQuantity > 0) "최대" else "가능") }
+    var quantityValue by remember { mutableLongStateOf(0L) }
+    var totalAmountValue by remember { mutableLongStateOf(0L) }
+    var proportionText by remember { mutableStateOf("가능") }
 
-    var isFarmingOrder by remember { mutableStateOf(false) }
-    var isUserInteracted by remember { mutableStateOf(false) }
-
-    LaunchedEffect(currentPrice) {
-        if (!isUserInteracted && orderType == OrderType.LIMIT) {
-            priceValue = currentPrice
-            val basePrice = if (orderType == OrderType.MARKET) currentPrice else priceValue
-            if (!isFarmingOrder) {
-                totalAmountValue = basePrice * quantityValue
-            }
-        }
-    }
-
-    LaunchedEffect(isFarmingOrder, priceValue, orderType) {
-        if (isFarmingOrder) {
-            val targetFarmingAmount = 500_000L
-            val basePrice = if (orderType == OrderType.MARKET) currentPrice else priceValue
-            if (basePrice > 0) {
-                quantityValue = targetFarmingAmount / basePrice
-                totalAmountValue = basePrice * quantityValue
-            } else {
-                quantityValue = 0L
-                totalAmountValue = 0L
-            }
-            proportionText = "농사"
-        } else {
-            if (proportionText == "농사") proportionText = "가능"
-        }
-    }
-
+    // KRX 공식 100% 반영 상하한가 도출
     val actualBasePrice = if (yesterdayPrice > 0L) yesterdayPrice else (currentPrice / (1.0 + todayChangeRate / 100.0)).roundToLong()
     val limitWidth = getKrxLimitWidth(actualBasePrice)
     val upperLimitPrice = actualBasePrice + limitWidth
@@ -213,12 +156,7 @@ fun OrderBottomSheet(
 
     val percentList = listOf(30, 25, 20, 15, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -15, -20, -25, -30)
     val tickList = listOf(20, 15, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -15, -20)
-
-    val proportionItems = if (tradeType == TradeType.BUY) {
-        listOf("최대", "75%", "50%", "25%", "10%", "농사")
-    } else {
-        listOf("최대", "75%", "50%", "25%", "10%")
-    }
+    val proportionList = listOf(100, 75, 50, 25, 10)
 
     var expandedPercent by remember { mutableStateOf(false) }
     var expandedTick by remember { mutableStateOf(false) }
@@ -231,20 +169,17 @@ fun OrderBottomSheet(
     LaunchedEffect(expandedTick) { if (expandedTick) tickScrollState.scrollToItem(9) }
 
     fun updateTotalAmount() {
-        if (isFarmingOrder) return
         val basePrice = if (orderType == OrderType.MARKET) currentPrice else priceValue
         totalAmountValue = basePrice * quantityValue
     }
 
-    fun resetProportionText() { if (!isFarmingOrder) proportionText = "가능" }
+    fun resetProportionText() { proportionText = "가능" }
 
     fun resetOrderState() {
         orderType = OrderType.LIMIT
         priceValue = currentPrice
         quantityValue = 0L
         totalAmountValue = 0L
-        isFarmingOrder = false
-        isUserInteracted = false
         resetProportionText()
     }
 
@@ -265,30 +200,8 @@ fun OrderBottomSheet(
                 .imePadding()
                 .verticalScroll(rememberScrollState())
         ) {
-            if (holdingQuantity > 0) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .wrapContentWidth(Alignment.CenterHorizontally)
-                        .background(colorPoint, RoundedCornerShape(6.dp))
-                        .padding(horizontal = 10.dp, vertical = 1.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = "보유 중 : ${numberFormat.format(holdingQuantity)}주",
-                        color = ColorBg,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            // [1] 헤더 (여기는 currentPrice를 직접 사용하여 실시간으로 번쩍임)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(text = stockName, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ColorTextPrimary)
                     Spacer(modifier = Modifier.width(8.dp))
@@ -301,99 +214,20 @@ fun OrderBottomSheet(
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // [2] 탭
             val tabIndex = if (tradeType == TradeType.BUY) 0 else 1
             TabRow(
                 selectedTabIndex = tabIndex, containerColor = Color.Transparent, contentColor = activeColor,
                 indicator = { TabRowDefaults.SecondaryIndicator(Modifier.tabIndicatorOffset(it[tabIndex]), color = activeColor) }
             ) {
-                Tab(
-                    selected = tradeType == TradeType.BUY,
-                    onClick = {
-                        tradeType = TradeType.BUY
-                        quantityValue = 0L
-                        totalAmountValue = 0L
-                        resetProportionText()
-                    },
-                    text = { Text("매수", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = if (tradeType == TradeType.BUY) colorBuy else ColorTextSecondary) }
-                )
-                Tab(
-                    selected = tradeType == TradeType.SELL,
-                    onClick = {
-                        tradeType = TradeType.SELL
-                        isFarmingOrder = false
-
-                        if (holdingQuantity > 0) {
-                            quantityValue = holdingQuantity
-                            val basePrice = if (orderType == OrderType.MARKET) currentPrice else priceValue
-                            totalAmountValue = basePrice * quantityValue
-                            proportionText = "최대"
-                        } else {
-                            quantityValue = 0L
-                            totalAmountValue = 0L
-                            resetProportionText()
-                        }
-                    },
-                    text = { Text("매도", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = if (tradeType == TradeType.SELL) colorSell else ColorTextSecondary) }
-                )
+                Tab(selected = tradeType == TradeType.BUY, onClick = { tradeType = TradeType.BUY }, text = { Text("매수", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = if (tradeType == TradeType.BUY) colorBuy else ColorTextSecondary) })
+                Tab(selected = tradeType == TradeType.SELL, onClick = { tradeType = TradeType.SELL }, text = { Text("매도", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = if (tradeType == TradeType.SELL) colorSell else ColorTextSecondary) })
             }
+
             Spacer(modifier = Modifier.height(12.dp))
 
-            // ==================== [시장 선택 토글] ====================
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .defaultMinSize(minHeight = 32.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    modifier = Modifier
-                        .height(32.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(ColorSurface)
-                        .border(1.dp, ColorSurface, RoundedCornerShape(8.dp))
-                ) {
-                    val krxSelected = selectedMarket == "KRX"
-                    val nxtSelected = selectedMarket == "NXT"
-
-                    // KRX 버튼
-                    Box(
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .fillMaxHeight()
-                            // 💡 시간 체크 후 불가 시 토스트 알림!
-                            .clickable {
-                                if (isRegularTime) {
-                                    selectedMarket = "KRX"
-                                } else {
-                                    Toast.makeText(context, "지금은 정규장(KRX) 거래 시간이 아닙니다.", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                            .background(if (krxSelected) colorPoint.copy(alpha = 0.15f) else Color.Transparent)
-                            .padding(horizontal = 14.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("KRX", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (krxSelected) colorPoint else ColorTextSecondary)
-                    }
-
-                    Box(modifier = Modifier.width(1.dp).fillMaxHeight(0.6f).background(ColorBg).align(Alignment.CenterVertically))
-
-                    // NXT 버튼
-                    Box(
-                        modifier = Modifier
-                            .weight(1f, fill = false)
-                            .fillMaxHeight()
-                            // NXT는 정규장과 시간외 모두 가능하므로 시간 제한 없이 클릭 허용
-                            .clickable { selectedMarket = "NXT" }
-                            .background(if (nxtSelected) colorPoint.copy(alpha = 0.15f) else Color.Transparent)
-                            .padding(horizontal = 14.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("NXT", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = if (nxtSelected) colorPoint else ColorTextSecondary)
-                    }
-                }
-
-                Spacer(modifier = Modifier.weight(1f))
-
+            // [3] 주문 가능
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Text(text = "주문가능: ${numberFormat.format(availableCash)} 원", color = ColorTextSecondary, fontSize = 12.sp)
             }
             Spacer(modifier = Modifier.height(8.dp))
@@ -418,6 +252,7 @@ fun OrderBottomSheet(
             // ==================== [단가 입력 영역] ====================
             val isLimit = orderType == OrderType.LIMIT
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 단가 입력창 + 내장형 상하 버튼
                 OutlinedTextField(
                     value = if (!isLimit) "시장가" else if (priceValue == 0L) "" else numberFormat.format(priceValue),
                     onValueChange = { newValue ->
@@ -426,7 +261,6 @@ fun OrderBottomSheet(
                             if (raw.all { it.isDigit() }) {
                                 val typedPrice = raw.toLongOrNull() ?: 0L
                                 priceValue = typedPrice.coerceIn(lowerLimitPrice, upperLimitPrice)
-                                isUserInteracted = true
                                 updateTotalAmount()
                             }
                         }
@@ -443,14 +277,12 @@ fun OrderBottomSheet(
                             onUpClick = {
                                 if (priceValue < upperLimitPrice) {
                                     priceValue = snapToValidTick(priceValue + getTickSize(priceValue)).coerceAtMost(upperLimitPrice)
-                                    isUserInteracted = true
                                     updateTotalAmount()
                                 }
                             },
                             onDownClick = {
                                 if (priceValue > lowerLimitPrice) {
                                     priceValue = snapToValidTick(priceValue - getTickSize(priceValue)).coerceAtLeast(lowerLimitPrice)
-                                    isUserInteracted = true
                                     updateTotalAmount()
                                 }
                             }
@@ -458,6 +290,7 @@ fun OrderBottomSheet(
                     }
                 )
 
+                // 현재가 동기화 버튼
                 Box(
                     modifier = Modifier
                         .weight(0.3f)
@@ -467,7 +300,6 @@ fun OrderBottomSheet(
                         .background(if (isLimit) ColorSurface else Color.Gray.copy(alpha = 0.15f))
                         .then(if (isLimit) Modifier.clickable {
                             priceValue = snapToValidTick(currentPrice).coerceIn(lowerLimitPrice, upperLimitPrice)
-                            isUserInteracted = true
                             updateTotalAmount()
                         } else Modifier),
                     contentAlignment = Alignment.Center
@@ -476,7 +308,9 @@ fun OrderBottomSheet(
                 }
             }
 
+            // 드롭메뉴
             Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 퍼센트 드롭박스
                 Box(modifier = Modifier.weight(1f).height(42.dp).clip(RoundedCornerShape(8.dp)).border(1.dp, ColorSurface, RoundedCornerShape(8.dp)).then(if(isLimit) Modifier.clickable { expandedPercent = true } else disabledModifier), contentAlignment = Alignment.Center) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("현재가 대비 %", color = if(isLimit) Color.White else ColorTextSecondary, fontSize = 13.sp)
@@ -493,7 +327,6 @@ fun OrderBottomSheet(
                                         onClick = {
                                             val calcPrice = (currentPrice * (1.0 + pct / 100.0)).toLong()
                                             priceValue = snapToValidTick(calcPrice).coerceIn(lowerLimitPrice, upperLimitPrice)
-                                            isUserInteracted = true
                                             updateTotalAmount()
                                             expandedPercent = false
                                         }
@@ -503,6 +336,7 @@ fun OrderBottomSheet(
                         }
                     }
                 }
+                // 호가 드롭박스
                 Box(modifier = Modifier.weight(1f).height(42.dp).clip(RoundedCornerShape(8.dp)).border(1.dp, ColorSurface, RoundedCornerShape(8.dp)).then(if(isLimit) Modifier.clickable { expandedTick = true } else disabledModifier), contentAlignment = Alignment.Center) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("현재가 대비 호가", color = if(isLimit) Color.White else ColorTextSecondary, fontSize = 13.sp)
@@ -518,7 +352,6 @@ fun OrderBottomSheet(
                                         text = { Text("$sign${tick}호가", color = txtColor, fontWeight = FontWeight.Bold) },
                                         onClick = {
                                             priceValue = calculatePriceByTick(currentPrice, tick).coerceIn(lowerLimitPrice, upperLimitPrice)
-                                            isUserInteracted = true
                                             updateTotalAmount()
                                             expandedTick = false
                                         }
@@ -533,9 +366,8 @@ fun OrderBottomSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             // ==================== [수량 입력 영역] ====================
-            val isQuantityEnabled = !isFarmingOrder
-
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // 수량 입력창 + 내장형 상하 버튼
                 OutlinedTextField(
                     value = if (quantityValue == 0L) "" else numberFormat.format(quantityValue),
                     onValueChange = { newValue ->
@@ -547,20 +379,12 @@ fun OrderBottomSheet(
                         }
                     },
                     label = { Text("주문 수량", color = ColorTextSecondary, fontSize = 12.sp) },
-                    enabled = isQuantityEnabled,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.weight(0.7f).then(if (isQuantityEnabled) Modifier else disabledModifier),
-                    textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.End, fontSize = 15.sp, color = if(isQuantityEnabled) ColorTextPrimary else ColorTextSecondary),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = ColorTextPrimary,
-                        unfocusedTextColor = ColorTextPrimary,
-                        disabledTextColor = ColorTextSecondary,
-                        disabledBorderColor = ColorSurface,
-                        disabledLabelColor = ColorTextSecondary
-                    ),
+                    modifier = Modifier.weight(0.7f),
+                    textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.End, fontSize = 15.sp),
+                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = ColorTextPrimary, unfocusedTextColor = ColorTextPrimary),
                     trailingIcon = {
                         EmbeddedStepper(
-                            enabled = isQuantityEnabled,
                             onUpClick = {
                                 quantityValue += 1
                                 updateTotalAmount()
@@ -577,6 +401,7 @@ fun OrderBottomSheet(
                     }
                 )
 
+                // '가능' 드롭박스
                 Box(
                     modifier = Modifier
                         .weight(0.3f)
@@ -584,46 +409,28 @@ fun OrderBottomSheet(
                         .padding(top = 6.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .border(1.dp, ColorSurface, RoundedCornerShape(8.dp))
-                        .background(if (isQuantityEnabled) Color.Transparent else Color.Gray.copy(alpha = 0.15f))
-                        .then(if (isQuantityEnabled) Modifier.clickable { expandedProportion = true } else Modifier),
+                        .clickable { expandedProportion = true },
                     contentAlignment = Alignment.Center
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = proportionText,
-                            color = if (isQuantityEnabled) Color.White else colorPoint,
-                            fontSize = 14.sp,
-                            fontWeight = if(!isQuantityEnabled) FontWeight.Bold else FontWeight.Normal
-                        )
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = if (isQuantityEnabled) Color.White else ColorTextSecondary)
+                        Text(proportionText, color = Color.White, fontSize = 14.sp)
+                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = Color.White)
                     }
                     DropdownMenu(expanded = expandedProportion, onDismissRequest = { expandedProportion = false }, modifier = Modifier.background(ColorSurface)) {
-                        proportionItems.forEach { label ->
-                            val isFarmingItem = label == "농사"
+                        proportionList.forEach { prop ->
+                            val label = if (prop == 100) "최대" else "${prop}%"
                             DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        text = label,
-                                        color = if (isFarmingItem) colorPoint else ColorTextPrimary,
-                                        fontWeight = if (isFarmingItem) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                },
+                                text = { Text(label, color = ColorTextPrimary) },
                                 onClick = {
-                                    if (isFarmingItem) {
-                                        isFarmingOrder = true
-                                    } else {
-                                        isFarmingOrder = false
-                                        val prop = label.replace("%", "").replace("최대", "100").toIntOrNull() ?: 100
-                                        val basePrice = if (orderType == OrderType.MARKET) currentPrice else priceValue
-                                        if (basePrice > 0) {
-                                            quantityValue = if (tradeType == TradeType.BUY) {
-                                                ((availableCash * (prop / 100.0)) / basePrice).toLong()
-                                            } else {
-                                                (holdingQuantity * (prop / 100.0)).toLong()
-                                            }
-                                            updateTotalAmount()
-                                            proportionText = label
+                                    val basePrice = if (orderType == OrderType.MARKET) currentPrice else priceValue
+                                    if (basePrice > 0) {
+                                        quantityValue = if (tradeType == TradeType.BUY) {
+                                            ((availableCash * (prop / 100.0)) / basePrice).toLong()
+                                        } else {
+                                            (holdingQuantity * (prop / 100.0)).toLong()
                                         }
+                                        updateTotalAmount()
+                                        proportionText = label
                                     }
                                     expandedProportion = false
                                 }
@@ -652,17 +459,10 @@ fun OrderBottomSheet(
                     }
                 },
                 label = { Text(if (orderType == OrderType.MARKET) "총 예상 금액 입력" else "총 주문 금액 입력", color = ColorTextSecondary, fontSize = 12.sp) },
-                enabled = isQuantityEnabled,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth().then(if (isQuantityEnabled) Modifier else disabledModifier),
-                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.End, color = if(isQuantityEnabled) activeColor else colorPoint, fontWeight = FontWeight.Bold, fontSize = 16.sp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = activeColor,
-                    unfocusedTextColor = activeColor,
-                    disabledTextColor = colorPoint,
-                    disabledBorderColor = ColorSurface,
-                    disabledLabelColor = ColorTextSecondary
-                )
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = LocalTextStyle.current.copy(textAlign = TextAlign.End, color = activeColor, fontWeight = FontWeight.Bold, fontSize = 16.sp),
+                colors = OutlinedTextFieldDefaults.colors(focusedTextColor = activeColor, unfocusedTextColor = activeColor)
             )
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -677,7 +477,7 @@ fun OrderBottomSheet(
                         if (tradeType == TradeType.BUY && totalAmountValue > availableCash) {
                             Toast.makeText(context, "주문 가능 금액을 초과하였습니다.", Toast.LENGTH_SHORT).show()
                         } else {
-                            onOrderSubmit(tradeType, orderType, priceValue, quantityValue, selectedMarket)
+                            onOrderSubmit(tradeType, orderType, priceValue, quantityValue)
                         }
                     },
                     modifier = Modifier.weight(0.75f).height(50.dp),
