@@ -231,11 +231,26 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                             if (trCd == "US3") {
                                 val rawStockCode = body.optString("shcode")
                                 val currentPriceStr = body.optString("price")
+                                val changeRateStr = body.optString("drate")
+                                // 💡 추가: LS웹소켓에서 부호와 전일대비금액 추출
+                                val signStr = body.optString("sign")
+                                val changeStr = body.optString("change")
                                 val stockCode = rawStockCode.filter { it.isDigit() }.takeLast(6)
 
                                 if (stockCode.isNotEmpty() && currentPriceStr.isNotEmpty()) {
                                     val newPrice = currentPriceStr.replace(",", "").toLongOrNull() ?: return@collect
-                                    updateStockPrice(currentState, stockCode, newPrice)
+                                    val newChangeRate = changeRateStr.replace(",", "").toDoubleOrNull() ?: 0.0
+                                    val changeAmt = changeStr.replace(",", "").toLongOrNull() ?: 0L
+
+                                    // 💡 부호(1,2:상승 / 4,5:하락)에 따라 정확한 전일종가 역산
+                                    val baseYesterdayPrice = when (signStr) {
+                                        "1", "2" -> newPrice - changeAmt
+                                        "4", "5" -> newPrice + changeAmt
+                                        else -> newPrice
+                                    }
+
+                                    // 💡 baseYesterdayPrice 파라미터 추가 전송
+                                    updateStockPrice(currentState, stockCode, newPrice, newChangeRate, baseYesterdayPrice)
                                 }
                             }
                         }
@@ -246,7 +261,13 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     // 💡 5. 총자산 실시간 계산 및 자동 정렬 적용
-    private fun updateStockPrice(currentState: UiState.BalanceLoaded, stockCode: String, newPrice: Long) {
+    private fun updateStockPrice(
+        currentState: UiState.BalanceLoaded,
+        stockCode: String,
+        newPrice: Long,
+        newChangeRate: Double,
+        baseYesterdayPrice: Long
+    ) {
         val oldBalance = currentState.balance
         val oldHoldings = oldBalance.holdings ?: return
 
@@ -254,7 +275,8 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         var newTotalHoldingsValue = 0L // 보유 주식의 총 평가금액
 
         val newHoldings = oldHoldings.map { stock ->
-            if (stock.itemCode.takeLast(6) == stockCode && stock.currentPrice != newPrice) {
+            // 💡 수정: 가격이 다르거나, 등락률이 다를 때(초기 0.00%에서 확정값으로 바뀔 때) 모두 업데이트 허용
+            if (stock.itemCode.takeLast(6) == stockCode && (stock.currentPrice != newPrice || stock.todayChangeRate != newChangeRate)) {
                 isChanged = true
 
                 val returnRate = if (stock.averagePrice > 0) {
@@ -263,7 +285,8 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                     stock.returnRate
                 }
 
-                val updatedStock = stock.copy(currentPrice = newPrice, returnRate = returnRate)
+                // 💡 수정 2: stock.copy 괄호 안에 todayChangeRate = newChangeRate 추가
+                val updatedStock = stock.copy(currentPrice = newPrice, returnRate = returnRate, todayChangeRate = newChangeRate, yesterdayPrice = baseYesterdayPrice)
                 newTotalHoldingsValue += (updatedStock.currentPrice * updatedStock.quantity)
                 updatedStock
             } else {
@@ -295,6 +318,45 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                 summary = newSummary
             )
             _uiState.value = UiState.BalanceLoaded(newBalance)
+        }
+    }
+
+    // 💡 6. [t1102 연동] 장 마감 후 확정 시세 단건 호출 (새로 추가된 로직)
+    fun fetchInitialPrice(stockCode: String) {
+        val currentUid = auth.currentUser?.uid ?: return
+        val account = _selectedAccount.value
+        if (account.isEmpty()) return
+        val token = tokenManager.getAccessToken(currentUid, account) ?: return
+
+        viewModelScope.launch {
+            try {
+                // T1102Request는 LsAuthModels.kt 또는 network 패키지에 정의한 클래스를 호출
+                val request = com.example.dk250403.network.T1102Request(
+                    com.example.dk250403.network.T1102InBlock(shcode = stockCode, exchgubun = "U")
+                )
+                val response = RetrofitClient.lsApi.getStockCurrentPrice(
+                    token = "Bearer $token",
+                    request = request
+                )
+
+                if (response.isSuccessful) {
+                    response.body()?.t1102OutBlock?.let { outBlock ->
+                        val currentState = _uiState.value
+                        if (currentState is UiState.BalanceLoaded) {
+                            // 💡 5번의 웹소켓용 상태 갱신 함수를 똑같이 재활용하여 바구니에 확정값을 꽂아줍니다!
+                            updateStockPrice(
+                                currentState = currentState,
+                                stockCode = stockCode,
+                                newPrice = outBlock.price,
+                                newChangeRate = outBlock.diff,
+                                baseYesterdayPrice = outBlock.recprice
+                            )
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
