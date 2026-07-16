@@ -138,3 +138,44 @@ data class T1102OutBlock(
     val uplmtprice: Long,    // 상한가
     val dnlmtprice: Long     // 하한가
 )
+
+
+// ==========================================
+// [CSPAT00601] 현물주문 API 모델
+// ==========================================
+
+data class OrderRequest(
+    @SerializedName("CSPAT00601InBlock1") val inBlock: CSPAT00601InBlock1
+)
+
+data class CSPAT00601InBlock1(
+    @SerializedName("IsuNo") val isuNo: String,             // 종목번호 (일반 주식은 종목코드 6자리, 모의투자는 'A' + 6자리 등 환경에 맞게 세팅 필요)
+    @SerializedName("OrdQty") val ordQty: Long,             // 주문수량
+    @SerializedName("OrdPrc") val ordPrc: Long,             // 주문가 (시장가의 경우 0 또는 API 가이드에 따른 값)
+    @SerializedName("BnsTpCode") val bnsTpCode: String,     // 매매구분 (1:매도, 2:매수)
+    @SerializedName("OrdprcPtnCode") val ordprcPtnCode: String, // 호가유형코드 (00:지정가, 03:시장가 등)
+    @SerializedName("MgntrnCode") val mgntrnCode: String = "000", // 신용거래코드 (000: 보통)
+    @SerializedName("LoanDt") val loanDt: String = "",      // 대출일 (신용 아닐경우 공백)
+    @SerializedName("OrdCndiTpCode") val ordCndiTpCode: String = "0", // 주문조건구분 (0:없음)
+    @SerializedName("MbrNo") val mbrNo: String = "KRX"      // 회원사번호
+)
+
+data class OrderResponse(
+    val rsp_cd: String?,
+    val rsp_msg: String?,
+    @SerializedName("CSPAT00601OutBlock1") val outBlock1: CSPAT00601OutBlock1?,
+    @SerializedName("CSPAT00601OutBlock2") val outBlock2: CSPAT00601OutBlock2?
+)
+
+// 응답 InBlock 메아리 (필요한 것만 매핑)
+data class CSPAT00601OutBlock1(
+    @SerializedName("OrdSeqNo") val ordSeqNo: Long
+)
+
+// 응답 실제 결과 (주문번호 등)
+data class CSPAT00601OutBlock2(
+    @SerializedName("OrdNo") val ordNo: Long,               // 발번된 주문번호
+    @SerializedName("OrdTime") val ordTime: String,         // 주문시각
+    @SerializedName("OrdAmt") val ordAmt: Long,             // 주문금액
+    @SerializedName("IsuNm") val isuNm: String              // 종목명
+)

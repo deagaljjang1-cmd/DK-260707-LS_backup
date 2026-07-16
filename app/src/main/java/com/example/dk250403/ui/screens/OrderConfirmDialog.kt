@@ -19,6 +19,7 @@ import com.example.dk250403.ColorSurface
 import com.example.dk250403.ColorTextPrimary
 import com.example.dk250403.ColorTextSecondary
 import java.text.DecimalFormat
+import java.util.Calendar
 
 @Composable
 fun OrderConfirmDialog(
@@ -31,6 +32,17 @@ fun OrderConfirmDialog(
     onDismiss: () -> Unit
 ) {
     val numberFormat = remember { DecimalFormat("#,###") }
+
+    // 💡 1. 팝업이 열릴 때의 시간을 계산하여 거래소 판별
+    val currentTimeHHmm = remember {
+        val calendar = Calendar.getInstance()
+        calendar.get(Calendar.HOUR_OF_DAY) * 100 + calendar.get(Calendar.MINUTE)
+    }
+    val targetExchange = if ((currentTimeHHmm in 800..849) || (currentTimeHHmm in 1540..1999)) {
+        "NXT"
+    } else {
+        "KRX"
+    }
 
     val isBuy = tradeType == TradeType.BUY
     val tradeTypeText = if (isBuy) "매수" else "매도"
@@ -89,6 +101,19 @@ fun OrderConfirmDialog(
                             )
                         }
                     }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 💡 [추가된 부분] 주문 거래소 표시 영역
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(text = "거래소", color = ColorTextSecondary, fontSize = 14.sp)
+                    Text(
+                        text = targetExchange,
+                        color = ColorTextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))

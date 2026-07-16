@@ -38,6 +38,7 @@ import java.text.DecimalFormat
 import kotlin.math.abs
 import kotlin.math.roundToLong
 import androidx.compose.ui.focus.onFocusChanged
+import java.util.Calendar
 
 enum class TradeType { BUY, SELL }
 enum class OrderType { LIMIT, MARKET }
@@ -158,6 +159,16 @@ fun OrderBottomSheet(
 
     // 💡 농사 매매 스위치 (상태)
     var isFarmingOrder by remember { mutableStateOf(false) }
+
+    // 💡 1-1. 현재 시간을 HHmm 형태의 숫자로 가져오기 (예: 오후 3시 45분 -> 1545)
+    val currentTimeHHmm = remember {
+        val calendar = Calendar.getInstance()
+        calendar.get(Calendar.HOUR_OF_DAY) * 100 + calendar.get(Calendar.MINUTE)
+    }
+
+    // 💡 1-2. 현재 시간이 NXT 운영 시간(08:00~08:49 또는 15:40~19:59)인지 체크
+    val isNxtTime = (currentTimeHHmm in 800..849) || (currentTimeHHmm in 1540..1999)
+    val isMarketOrderEnabled = !isNxtTime // NXT 시간이 아닐 때만 시장가 활성화
 
     LaunchedEffect(currentPrice) {
         // 지정가(LIMIT)일 때는 주문 단가가 실시간 현재가를 절대 따라가지 않도록 추적 로직 삭제됨.
@@ -342,9 +353,20 @@ fun OrderBottomSheet(
                 ) { Text("지정가", fontWeight = FontWeight.Bold, fontSize = 14.sp) }
 
                 Button(
-                    onClick = { orderType = OrderType.MARKET; priceValue = 0L; updateTotalAmount() },
+                    onClick = {
+                        // 💡 1-3. 시장가 활성화 상태에 따라 분기 처리
+                        if (isMarketOrderEnabled) {
+                            orderType = OrderType.MARKET; priceValue = 0L; updateTotalAmount()
+                        } else {
+                            android.widget.Toast.makeText(context, "시간외 거래 시간(NXT)에서는 지정가 주문만 가능합니다.", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                    },
                     modifier = Modifier.weight(1f).height(42.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = if (orderType == OrderType.MARKET) Color.White else ColorSurface, contentColor = if (orderType == OrderType.MARKET) Color.Black else ColorTextSecondary)
+                    colors = ButtonDefaults.buttonColors(
+                        // 💡 비활성화(NXT 시간) 상태일 때는 버튼 색상을 어둡게(반투명) 처리
+                        containerColor = if (orderType == OrderType.MARKET) Color.White else if (!isMarketOrderEnabled) ColorSurface.copy(alpha = 0.5f) else ColorSurface,
+                        contentColor = if (orderType == OrderType.MARKET) Color.Black else if (!isMarketOrderEnabled) ColorTextSecondary.copy(alpha = 0.5f) else ColorTextSecondary
+                    )
                 ) { Text("시장가", fontWeight = FontWeight.Bold, fontSize = 14.sp) }
             }
 

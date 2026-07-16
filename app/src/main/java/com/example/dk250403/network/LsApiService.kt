@@ -68,4 +68,16 @@ interface LsApiService {
         @Body request: T1102Request
     ): Response<T1102Response>
 
+
+    // 💡 [CSPAT00601] 현물 정상주문
+    @POST("stock/order")
+    suspend fun submitOrder(
+        @Header("authorization") token: String,
+        @Header("tr_cd") trCd: String = "CSPAT00601",
+        @Header("tr_cont") trCont: String = "N",
+        @Header("tr_cont_key") trContKey: String = "",
+        @Header("mac_address") macAddress: String = "",
+        @Body request: OrderRequest
+    ): Response<OrderResponse>
+
 }

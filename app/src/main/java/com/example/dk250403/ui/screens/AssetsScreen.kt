@@ -27,6 +27,9 @@ fun AssetsScreen(
     modifier: Modifier = Modifier,
     viewModel: AssetsViewModel
 ) {
+    // 💡 방금 추가한 코드: 화면 아래에 안내 메시지(Toast)를 띄우기 위해 필요한 준비물입니다.
+    val context = androidx.compose.ui.platform.LocalContext.current
+
     val uiState by viewModel.uiState.collectAsState()
     val currentSortType by viewModel.sortType.collectAsState()
 
@@ -228,10 +231,25 @@ fun AssetsScreen(
                 onDismiss = { showConfirmDialog = false },
                 onConfirm = {
                     showConfirmDialog = false
-                    selectedStockCodeForOrder = null // 💡 코드를 null로 비워주어 바텀 시트를 닫음
 
-                    // TODO: LS증권 API로 주문 전송 로직 (다음 단계)
-                    println("🚀 주문 전송 완료: ${pendingTradeType} / 단가: $pendingPrice / 수량: $pendingQuantity")
+                    // 💡 시트를 닫기 전에 어떤 종목이었는지 임시로 기억해 둡니다.
+                    val targetStockCode = selectedStockCodeForOrder ?: ""
+
+                    selectedStockCodeForOrder = null // 바텀 시트 닫기
+
+                    // 💡 위에서 만들었던 ViewModel의 발사 버튼을 여기서 누릅니다!
+                    if (targetStockCode.isNotEmpty()) {
+                        viewModel.submitStockOrder(
+                            stockCode = targetStockCode,
+                            tradeType = pendingTradeType,
+                            orderType = pendingOrderType,
+                            price = pendingPrice,
+                            quantity = pendingQuantity
+                        ) { isSuccess, message ->
+                            // 증권사 서버에서 응답이 오면 화면 아래에 까만색 토스트 메시지를 띄워줍니다.
+                            android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
             )
         }

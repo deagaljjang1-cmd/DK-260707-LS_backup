@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.util.Calendar
 
 // 💡 1. 정렬 기준 Enum 추가
 enum class SortType {
@@ -356,6 +357,91 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+            }
+        }
+    }
+
+
+    // =======================================================
+    // 💡 [실제 주문 전송 로직] UI에서 받아온 데이터를 API 규격으로 변환해서 쏩니다.
+    // =======================================================
+    fun submitStockOrder(
+        stockCode: String,
+        tradeType: com.example.dk250403.ui.screens.TradeType,
+        orderType: com.example.dk250403.ui.screens.OrderType,
+        price: Long,
+        quantity: Long,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        val currentUid = auth.currentUser?.uid ?: return
+        val account = _selectedAccount.value
+
+        if (account.isEmpty()) {
+            onResult(false, "계좌를 먼저 선택해주세요.")
+            return
+        }
+
+        val token = tokenManager.getAccessToken(currentUid, account)
+        if (token.isNullOrEmpty()) {
+            onResult(false, "인증 토큰이 없습니다. 계좌를 다시 조회해주세요.")
+            return
+        }
+
+        // --- 💡 2-1. 시간대별 스마트 라우팅 (거래소 판별) ---
+        val calendar = Calendar.getInstance()
+        val currentTimeHHmm = calendar.get(Calendar.HOUR_OF_DAY) * 100 + calendar.get(Calendar.MINUTE)
+
+        // 08:00~08:49 또는 15:40~19:59 인 경우 NXT, 그 외는 KRX로 세팅
+        val targetMbrNo = if ((currentTimeHHmm in 800..849) || (currentTimeHHmm in 1540..1999)) {
+            "NXT"
+        } else {
+            "KRX"
+        }
+        // ---------------------------------------------------
+
+        val bnsTpCode = if (tradeType == com.example.dk250403.ui.screens.TradeType.BUY) "2" else "1"
+
+        // 💡 2-2. 2차 방어 로직: 만약 NXT 라우팅인데 시장가(MARKET)가 넘어왔다면 안전을 위해 강제로 지정가(LIMIT)로 덮어씌움
+        var finalOrderType = orderType
+        if (targetMbrNo == "NXT" && orderType == com.example.dk250403.ui.screens.OrderType.MARKET) {
+            finalOrderType = com.example.dk250403.ui.screens.OrderType.LIMIT
+        }
+
+        val ordprcPtnCode = if (finalOrderType == com.example.dk250403.ui.screens.OrderType.LIMIT) "00" else "03"
+        val finalPrice = if (finalOrderType == com.example.dk250403.ui.screens.OrderType.MARKET) 0L else price
+
+        val inBlock = com.example.dk250403.network.CSPAT00601InBlock1(
+            isuNo = stockCode,
+            ordQty = quantity,
+            ordPrc = finalPrice,
+            bnsTpCode = bnsTpCode,
+            ordprcPtnCode = ordprcPtnCode,
+            mbrNo = targetMbrNo // 💡 시간에 따라 결정된 거래소 세팅
+        )
+        val request = com.example.dk250403.network.OrderRequest(inBlock)
+
+        viewModelScope.launch {
+            try {
+                val response = com.example.dk250403.network.RetrofitClient.lsApi.submitOrder(
+                    token = "Bearer $token",
+                    request = request
+                )
+
+                if (response.isSuccessful && response.body() != null) {
+                    val body = response.body()!!
+                    val orderNo = body.outBlock2?.ordNo ?: 0L
+                    val responseMessage = body.rsp_msg ?: ""
+
+                    if (body.rsp_cd == "00000" || orderNo > 0L || responseMessage.contains("완료") || responseMessage.contains("접수")) {
+                        onResult(true, "$responseMessage (주문번호: $orderNo)")
+                    } else {
+                        onResult(false, "주문 거절: $responseMessage")
+                    }
+                } else {
+                    onResult(false, "통신 상태가 원활하지 않습니다.")
+                }
+            } catch (e: Exception) {
+                onResult(false, "앱 내부 오류가 발생했습니다.")
             }
         }
     }
