@@ -179,3 +179,46 @@ data class CSPAT00601OutBlock2(
     @SerializedName("OrdAmt") val ordAmt: Long,             // 주문금액
     @SerializedName("IsuNm") val isuNm: String              // 종목명
 )
+
+// ==========================================
+// [t0425] 현물 체결/미체결 조회 API 모델
+// ==========================================
+
+data class T0425Request(
+    @SerializedName("t0425InBlock") val t0425InBlock: T0425InBlock
+)
+
+data class T0425InBlock(
+    @SerializedName("expcode") val expcode: String = "",
+    @SerializedName("chegb") val chegb: String = "2",   // 2: 미체결 고정
+    @SerializedName("medosu") val medosu: String = "0", // 0: 전체 (매수/매도 모두)
+    @SerializedName("sortgb") val sortgb: String = "1", // 1: 역순 (최신순)
+    @SerializedName("cts_ordno") val ctsOrdno: String = ""
+)
+
+data class T0425Response(
+    val rsp_cd: String?,
+    val rsp_msg: String?,
+    @SerializedName("t0425OutBlock") val outBlock: T0425OutBlock?,
+    @SerializedName("t0425OutBlock1") val unexecutedList: List<T0425OutBlock1>?
+)
+
+data class T0425OutBlock(
+    @SerializedName("tordrem") val totalUnexecutedQty: Long
+)
+
+data class T0425OutBlock1(
+    @SerializedName("ordno") val ordno: Long,             // 주문번호
+    @SerializedName("expcode") val expcode: String,       // 종목번호
+    @SerializedName("exchname") val exchname: String,     // 거래소명
+    @SerializedName("medosu") val medosu: String,         // 매매구분 (매도/매수)
+    @SerializedName("qty") val qty: Long,                 // 주문수량
+    @SerializedName("price") val price: Long,             // 주문가격
+    @SerializedName("price1") val price1: Long,           // 현재가
+    @SerializedName("cheqty") val cheqty: Long,           // 체결수량
+    @SerializedName("ordrem") val ordrem: Long,           // 미체결잔량
+    @SerializedName("ordgb") val ordgb: String,           // 주문유형
+    @SerializedName("hogagb") val hogagb: String,         // 호가유형
+    @SerializedName("ordtime") val ordtime: String,       // 주문시간
+    @SerializedName("ordermtd") val ordermtd: String      // 주문매체
+)

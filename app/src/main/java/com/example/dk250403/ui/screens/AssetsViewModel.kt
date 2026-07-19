@@ -51,6 +51,13 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
 
     private val subscribedCodes = mutableSetOf<String>()
 
+    // 💡 미체결 내역을 담아둘 상태 변수
+    private val _unexecutedOrders = MutableStateFlow<List<com.example.dk250403.network.T0425OutBlock1>>(emptyList())
+    val unexecutedOrders: StateFlow<List<com.example.dk250403.network.T0425OutBlock1>> = _unexecutedOrders.asStateFlow()
+
+    private val _isUnexecutedLoading = MutableStateFlow(false)
+    val isUnexecutedLoading: StateFlow<Boolean> = _isUnexecutedLoading.asStateFlow()
+
     init {
         observeRealtimeWebSocket()
     }
@@ -442,6 +449,48 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (e: Exception) {
                 onResult(false, "앱 내부 오류가 발생했습니다.")
+            }
+        }
+    }
+
+
+    // =======================================================
+    // 💡 [미체결 내역 조회 로직]
+    // =======================================================
+    fun fetchUnexecutedOrders() {
+        val currentUid = auth.currentUser?.uid ?: return
+        val account = _selectedAccount.value
+        if (account.isEmpty()) return
+
+        val token = tokenManager.getAccessToken(currentUid, account)
+        if (token.isNullOrEmpty()) return
+
+        _isUnexecutedLoading.value = true
+
+        viewModelScope.launch {
+            try {
+                val request = com.example.dk250403.network.T0425Request(
+                    com.example.dk250403.network.T0425InBlock() // 기본값이 모두 설정되어 있으므로 빈 괄호
+                )
+                val response = com.example.dk250403.network.RetrofitClient.lsApi.getUnexecutedOrders(
+                    token = "Bearer $token",
+                    request = request
+                )
+
+                if (response.isSuccessful && response.body() != null) {
+                    val body = response.body()!!
+                    if ((body.rsp_cd == "00000" || body.rsp_cd?.contains("00156") == true) && body.unexecutedList != null) {
+                        _unexecutedOrders.value = body.unexecutedList
+                    } else {
+                        _unexecutedOrders.value = emptyList()
+                    }
+                } else {
+                    _unexecutedOrders.value = emptyList()
+                }
+            } catch (e: Exception) {
+                _unexecutedOrders.value = emptyList()
+            } finally {
+                _isUnexecutedLoading.value = false
             }
         }
     }

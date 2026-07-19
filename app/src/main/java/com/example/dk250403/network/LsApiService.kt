@@ -80,4 +80,14 @@ interface LsApiService {
         @Body request: OrderRequest
     ): Response<OrderResponse>
 
+    // 💡 [t0425] 주식 미체결 내역 조회
+    @POST("stock/accno")
+    suspend fun getUnexecutedOrders(
+        @Header("authorization") token: String,
+        @Header("tr_cd") trCd: String = "t0425",
+        @Header("tr_cont") trCont: String = "N",
+        @Header("mac_address") macAddress: String = "",
+        @Body request: com.example.dk250403.network.T0425Request
+    ): Response<com.example.dk250403.network.T0425Response>
+
 }

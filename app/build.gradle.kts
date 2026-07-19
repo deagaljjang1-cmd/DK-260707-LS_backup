@@ -79,4 +79,7 @@ dependencies {
 
 // ViewModel & Coroutines (상태 관리 및 비동기 처리)
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
+
+// 당겨서 새로고침 로딩바
+    implementation("androidx.compose.material:material:1.6.0")
 }
