@@ -5,10 +5,16 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.dk250403.network.BalanceRequest
 import com.example.dk250403.network.BalanceResponse
+import com.example.dk250403.network.CSPAT00701InBlock1
+import com.example.dk250403.network.CSPAT00801InBlock1
+import com.example.dk250403.network.CancelOrderRequest
 import com.example.dk250403.network.LsWebSocketManager
+import com.example.dk250403.network.ModifyOrderRequest
 import com.example.dk250403.network.RetrofitClient
 import com.example.dk250403.network.StockHolding
 import com.example.dk250403.network.T0424InBlock
+import com.example.dk250403.network.T8436InBlock
+import com.example.dk250403.network.T8436Request
 import com.example.dk250403.util.TokenManager
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.Job
@@ -58,8 +64,44 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
     private val _isUnexecutedLoading = MutableStateFlow(false)
     val isUnexecutedLoading: StateFlow<Boolean> = _isUnexecutedLoading.asStateFlow()
 
+    // 클래스 상단 변수 선언부에 종목 사전을 저장할 StateFlow 추가
+    private val _stockMasterMap = MutableStateFlow<Map<String, String>>(emptyMap())
+    val stockMasterMap: StateFlow<Map<String, String>> = _stockMasterMap.asStateFlow()
+
     init {
         observeRealtimeWebSocket()
+    }
+
+    // 💡 종목 마스터 데이터를 받아와 사전을 만드는 함수 (파라미터 추가)
+    private fun fetchStockMaster(uid: String, account: String) {
+        if (_stockMasterMap.value.isNotEmpty()) return
+
+        val token = tokenManager.getAccessToken(uid, account)
+        if (token.isNullOrEmpty()) return
+
+        viewModelScope.launch {
+            try {
+                val request = T8436Request(T8436InBlock(gubun = "0"))
+                val response = com.example.dk250403.network.RetrofitClient.lsApi.fetchStockMaster(
+                    token = "Bearer $token",
+                    request = request
+                )
+
+                if (response.isSuccessful) {
+                    val outBlock = response.body()?.t8436OutBlock
+                    if (outBlock != null) {
+                        val tempMap = mutableMapOf<String, String>()
+                        outBlock.forEach { stock ->
+                            tempMap[stock.shcode] = stock.hname
+                            tempMap[stock.expcode] = stock.hname
+                        }
+                        _stockMasterMap.value = tempMap
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     fun clearData() {
@@ -88,7 +130,11 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
             _uiState.value = UiState.Error("등록된 계좌가 없습니다. 계정 설정에서 앱키와 계좌번호를 먼저 등록해주세요.")
             return
         }
-        requestBalanceForAccount(accounts.first())
+        val firstAccount = accounts.first()
+        requestBalanceForAccount(firstAccount)
+
+        // 💡 여기에 추가: 앱 실행 직후 백그라운드에서 종목 사전 미리 다운로드!
+        fetchStockMaster(currentUid, firstAccount)
     }
 
     fun requestBalanceForAccount(accountNumber: String) {
@@ -465,6 +511,10 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         val token = tokenManager.getAccessToken(currentUid, account)
         if (token.isNullOrEmpty()) return
 
+        // 💡 여기에 추가: 토큰과 계좌가 모두 준비된 확실한 시점에 사전 다운로드!
+        // 💡 파라미터 추가
+        fetchStockMaster(currentUid, account)
+
         _isUnexecutedLoading.value = true
 
         viewModelScope.launch {
@@ -493,6 +543,186 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                 _isUnexecutedLoading.value = false
             }
         }
+    }
+
+
+    // =======================================================
+    // 💡 [개별 취소] 단건 주문 취소 전송
+    // =======================================================
+    fun cancelSingleOrder(
+        orgOrdNo: Long,
+        stockCode: String,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        val currentUid = auth.currentUser?.uid ?: return
+        val account = _selectedAccount.value
+        val token = tokenManager.getAccessToken(currentUid, account) ?: return
+
+        viewModelScope.launch {
+            try {
+                val request = CancelOrderRequest(
+                    CSPAT00801InBlock1(orgOrdNo = orgOrdNo, isuNo = stockCode, ordQty = 0)
+                )
+                val response = com.example.dk250403.network.RetrofitClient.lsApi.cancelOrder(
+                    token = "Bearer $token",
+                    request = request
+                )
+
+                if (response.isSuccessful && response.body() != null) {
+                    val body = response.body()!!
+                    if (body.rsp_cd == "00000" || body.rsp_msg?.contains("완료") == true) {
+                        onResult(true, "주문이 취소되었습니다.")
+                        fetchUnexecutedOrders() // 성공 후 리스트 새로고침
+                    } else {
+                        onResult(false, "취소 거절: ${body.rsp_msg}")
+                    }
+                } else {
+                    onResult(false, "통신 상태가 원활하지 않습니다.")
+                }
+            } catch (e: Exception) {
+                onResult(false, "앱 내부 오류가 발생했습니다.")
+            }
+        }
+    }
+
+    // =======================================================
+    // 💡 [일괄 취소] 선택된 여러 건의 주문을 순차적으로 전송 (TPS 제한 방어)
+    // =======================================================
+    fun cancelSelectedOrders(
+        selectedOrderNos: Set<Long>,
+        onComplete: (successCount: Int, failCount: Int) -> Unit
+    ) {
+        val currentUid = auth.currentUser?.uid ?: return
+        val account = _selectedAccount.value
+        val token = tokenManager.getAccessToken(currentUid, account) ?: return
+
+        // 현재 미체결 리스트에서 선택된 번호의 주문만 걸러냄
+        val ordersToCancel = _unexecutedOrders.value.filter { selectedOrderNos.contains(it.ordno) }
+        if (ordersToCancel.isEmpty()) return
+
+        _isUnexecutedLoading.value = true // 로딩 인디케이터 ON
+
+        viewModelScope.launch {
+            var successCount = 0
+            var failCount = 0
+
+            for (order in ordersToCancel) {
+                try {
+                    val request = CancelOrderRequest(
+                        CSPAT00801InBlock1(
+                            orgOrdNo = order.ordno,
+                            isuNo = order.expcode,
+                            ordQty = 0
+                        )
+                    )
+                    val response = com.example.dk250403.network.RetrofitClient.lsApi.cancelOrder(
+                        token = "Bearer $token",
+                        request = request
+                    )
+
+                    if (response.isSuccessful && response.body()?.rsp_cd == "00000") {
+                        successCount++
+                    } else {
+                        failCount++
+                    }
+                } catch (e: Exception) {
+                    failCount++
+                }
+
+                // 🚨 중요: 증권사 API 초당 전송 제한(TPS)을 피하기 위해 주문 1건당 0.3초 대기
+                kotlinx.coroutines.delay(400)
+            }
+
+            // 모든 취소 전송이 끝나면 미체결 리스트를 최신화하고 UI로 결과 반환
+            fetchUnexecutedOrders()
+            onComplete(successCount, failCount)
+        }
+    }
+
+    // =======================================================
+    // 💡 [개별 정정] 단건 주문 정정 전송
+    // =======================================================
+    fun modifySingleOrder(
+        orgOrdNo: Long,
+        stockCode: String,
+        newQty: Long,
+        newPrice: Long,
+        onResult: (Boolean, String) -> Unit
+    ) {
+        val currentUid = auth.currentUser?.uid ?: return
+        val account = _selectedAccount.value
+        val token = tokenManager.getAccessToken(currentUid, account) ?: return
+
+        viewModelScope.launch {
+            try {
+                val request = ModifyOrderRequest(
+                    CSPAT00701InBlock1(
+                        orgOrdNo = orgOrdNo,
+                        isuNo = stockCode,
+                        ordQty = newQty,
+                        ordPrc = newPrice
+                    )
+                )
+                val response = com.example.dk250403.network.RetrofitClient.lsApi.modifyOrder(
+                    token = "Bearer $token",
+                    request = request
+                )
+
+                if (response.isSuccessful && response.body() != null) {
+                    val body = response.body()!!
+                    if (body.rsp_cd == "00000" || body.rsp_msg?.contains("완료") == true) {
+                        onResult(true, "주문이 정정되었습니다.")
+                        fetchUnexecutedOrders() // 성공 후 리스트 새로고침
+                    } else {
+                        onResult(false, "정정 거절: ${body.rsp_msg}")
+                    }
+                } else {
+                    onResult(false, "통신 상태가 원활하지 않습니다.")
+                }
+            } catch (e: Exception) {
+                onResult(false, "앱 내부 오류가 발생했습니다.")
+            }
+        }
+    }
+
+
+    // 💡 정정 바텀 시트용 상/하한가 상태 관리 (Pair<상한가, 하한가>)
+    private val _currentStockLimits = MutableStateFlow<Pair<Long, Long>?>(null)
+    val currentStockLimits: StateFlow<Pair<Long, Long>?> = _currentStockLimits.asStateFlow()
+
+    // 💡 바텀 시트 오픈 시 호출하여 상/하한가 세팅
+    fun fetchStockLimitsForModify(stockCode: String) {
+        val currentUid = auth.currentUser?.uid ?: return
+        val account = _selectedAccount.value
+        val token = tokenManager.getAccessToken(currentUid, account) ?: return
+
+        viewModelScope.launch {
+            try {
+                val request = com.example.dk250403.network.T1102Request(
+                    com.example.dk250403.network.T1102InBlock(shcode = stockCode, exchgubun = "U")
+                )
+                val response = com.example.dk250403.network.RetrofitClient.lsApi.getStockCurrentPrice(
+                    token = "Bearer $token",
+                    request = request
+                )
+
+                if (response.isSuccessful) {
+                    response.body()?.t1102OutBlock?.let { outBlock ->
+                        // 🚨 주의: T1102OutBlock 모델에 uplmtprice(상한가), dnlmtprice(하한가) 필드가 있어야 합니다.
+                        val upper = outBlock.uplmtprice ?: 0L
+                        val lower = outBlock.dnlmtprice ?: 0L
+                        _currentStockLimits.value = Pair(upper, lower)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    // 💡 바텀 시트를 닫을 때 상태 초기화
+    fun clearStockLimits() {
+        _currentStockLimits.value = null
     }
 
     sealed class UiState {

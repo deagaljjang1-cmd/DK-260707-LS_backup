@@ -90,4 +90,38 @@ interface LsApiService {
         @Body request: com.example.dk250403.network.T0425Request
     ): Response<com.example.dk250403.network.T0425Response>
 
+    // 💡 [t8436] 주식종목조회 API용 조회
+    @POST("/stock/etc")
+    suspend fun fetchStockMaster(
+        @Header("authorization") token: String,
+        @Header("tr_cd") trCd: String = "t8436",
+        @Header("tr_cont") trCont: String = "N",
+        @Header("tr_cont_key") trContKey: String = "",
+        @Header("mac_address") macAddress: String = "", // 법인 아니면 빈 값으로도 동작 가능
+        @Body request: T8436Request
+    ): retrofit2.Response<T8436Response>
+
+
+    // 💡 [CSPAT00801] 현물취소주문
+    @POST("/stock/order")
+    suspend fun cancelOrder(
+        @Header("authorization") token: String,
+        @Header("tr_cd") trCd: String = "CSPAT00801",
+        @Header("tr_cont") trCont: String = "N",
+        @Header("tr_cont_key") trContKey: String = "",
+        @Header("mac_address") macAddress: String = "",
+        @Body request: CancelOrderRequest
+    ): retrofit2.Response<CancelOrderResponse>
+
+    // 💡 [CSPAT00701] 현물정정주문
+    @POST("/stock/order")
+    suspend fun modifyOrder(
+        @Header("authorization") token: String,
+        @Header("tr_cd") trCd: String = "CSPAT00701",
+        @Header("tr_cont") trCont: String = "N",
+        @Header("tr_cont_key") trContKey: String = "",
+        @Header("mac_address") macAddress: String = "",
+        @Body request: ModifyOrderRequest
+    ): retrofit2.Response<ModifyOrderResponse>
+
 }

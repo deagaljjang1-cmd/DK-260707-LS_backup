@@ -222,3 +222,70 @@ data class T0425OutBlock1(
     @SerializedName("ordtime") val ordtime: String,       // 주문시간
     @SerializedName("ordermtd") val ordermtd: String      // 주문매체
 )
+
+
+// ==========================================
+// [t8436] 주식종목조회 (종목 마스터)
+// ==========================================
+data class T8436Request(
+    @SerializedName("t8436InBlock") val t8436InBlock: T8436InBlock
+)
+
+data class T8436InBlock(
+    @SerializedName("gubun") val gubun: String = "0" // 0: 전체, 1: 코스피, 2: 코스닥
+)
+
+data class T8436Response(
+    @SerializedName("t8436OutBlock") val t8436OutBlock: List<T8436OutBlock>
+)
+
+data class T8436OutBlock(
+    @SerializedName("hname") val hname: String,      // 종목명
+    @SerializedName("shcode") val shcode: String,    // 단축코드 (6자리)
+    @SerializedName("expcode") val expcode: String   // 확장코드 (12자리)
+)
+
+
+// ==========================================
+// [CSPAT00801] 현물 취소 주문
+// ==========================================
+data class CancelOrderRequest(
+    @com.google.gson.annotations.SerializedName("CSPAT00801InBlock1")
+    val inBlock: CSPAT00801InBlock1
+)
+
+data class CSPAT00801InBlock1(
+    @com.google.gson.annotations.SerializedName("OrgOrdNo") val orgOrdNo: Long, // 원주문번호
+    @com.google.gson.annotations.SerializedName("IsuNo") val isuNo: String,     // 종목번호
+    @com.google.gson.annotations.SerializedName("OrdQty") val ordQty: Long = 0  // 0이면 전량 취소
+)
+
+// 💡 응답 모델은 신규 주문(CSPAT00601)의 응답 모델을 재사용해도 되지만,
+// 명확하게 분리하기 위해 취소 전용 응답 모델을 구성합니다.
+data class CancelOrderResponse(
+    val rsp_cd: String?,
+    val rsp_msg: String?
+)
+
+
+// ==========================================
+// [CSPAT00701] 현물 정정 주문
+// ==========================================
+data class ModifyOrderRequest(
+    @com.google.gson.annotations.SerializedName("CSPAT00701InBlock1")
+    val inBlock: CSPAT00701InBlock1
+)
+
+data class CSPAT00701InBlock1(
+    @com.google.gson.annotations.SerializedName("OrgOrdNo") val orgOrdNo: Long, // 원주문번호
+    @com.google.gson.annotations.SerializedName("IsuNo") val isuNo: String,     // 종목번호
+    @com.google.gson.annotations.SerializedName("OrdQty") val ordQty: Long,     // 정정할 수량
+    @com.google.gson.annotations.SerializedName("OrdprcPtnCode") val ordprcPtnCode: String = "00", // 00: 지정가
+    @com.google.gson.annotations.SerializedName("OrdCndiTpCode") val ordCndiTpCode: String = "0",  // 0: 없음
+    @com.google.gson.annotations.SerializedName("OrdPrc") val ordPrc: Long      // 정정할 가격
+)
+
+data class ModifyOrderResponse(
+    val rsp_cd: String?,
+    val rsp_msg: String?
+)
