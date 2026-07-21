@@ -214,6 +214,8 @@ data class T0425OutBlock1(
     @SerializedName("medosu") val medosu: String,         // 매매구분 (매도/매수)
     @SerializedName("qty") val qty: Long,                 // 주문수량
     @SerializedName("price") val price: Long,             // 주문가격
+    @SerializedName("cheprice") val cheprice: Long,       // 💡 추가: 체결가격 (시장가 0원 문제 해결)
+    @SerializedName("orgordno") val orgordno: Long,       // 💡 추가: 원주문번호(정정, 취소 시 필요한데 주문번호로만 해도 됨)
     @SerializedName("price1") val price1: Long,           // 현재가
     @SerializedName("cheqty") val cheqty: Long,           // 체결수량
     @SerializedName("ordrem") val ordrem: Long,           // 미체결잔량

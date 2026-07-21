@@ -68,6 +68,18 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
     private val _stockMasterMap = MutableStateFlow<Map<String, String>>(emptyMap())
     val stockMasterMap: StateFlow<Map<String, String>> = _stockMasterMap.asStateFlow()
 
+    private val _executedOrders = MutableStateFlow<List<com.example.dk250403.network.T0425OutBlock1>>(emptyList())
+    val executedOrders: StateFlow<List<com.example.dk250403.network.T0425OutBlock1>> = _executedOrders.asStateFlow()
+
+    private val _isExecutedLoading = MutableStateFlow(false)
+    val isExecutedLoading: StateFlow<Boolean> = _isExecutedLoading.asStateFlow()
+
+    private val _todayTotalBuy = MutableStateFlow(0L)
+    val todayTotalBuy: StateFlow<Long> = _todayTotalBuy.asStateFlow()
+
+    private val _todayTotalSell = MutableStateFlow(0L)
+    val todayTotalSell: StateFlow<Long> = _todayTotalSell.asStateFlow()
+
     init {
         observeRealtimeWebSocket()
     }
@@ -541,6 +553,69 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                 _unexecutedOrders.value = emptyList()
             } finally {
                 _isUnexecutedLoading.value = false
+            }
+        }
+    }
+
+    // =======================================================
+    // 💡 [체결 내역 조회 로직]
+    // =======================================================
+    fun fetchExecutedOrders() {
+        val currentUid = auth.currentUser?.uid ?: return
+        val account = _selectedAccount.value
+        if (account.isEmpty()) return
+
+        val token = tokenManager.getAccessToken(currentUid, account)
+        if (token.isNullOrEmpty()) return
+
+        fetchStockMaster(currentUid, account)
+
+        _isExecutedLoading.value = true
+
+        viewModelScope.launch {
+            try {
+                // 💡 chegb = "1" (체결 내역) 으로 세팅하여 호출
+                val request = com.example.dk250403.network.T0425Request(
+                    com.example.dk250403.network.T0425InBlock(chegb = "1")
+                )
+                val response = com.example.dk250403.network.RetrofitClient.lsApi.getUnexecutedOrders(
+                    token = "Bearer $token",
+                    request = request
+                )
+
+                if (response.isSuccessful && response.body() != null) {
+                    val body = response.body()!!
+                    if ((body.rsp_cd == "00000" || body.rsp_cd?.contains("00156") == true) && body.unexecutedList != null) {
+                        val list = body.unexecutedList
+                        _executedOrders.value = list
+
+                        // 💡 당일 총 매수/매도 금액 계산 (주문단가가 아닌 체결단가 기준)
+                        var buySum = 0L
+                        var sellSum = 0L
+                        list.forEach { order ->
+                            // 💡 변경: order.price -> order.cheprice
+                            val amount = order.cheprice * order.cheqty
+                            if (order.medosu.contains("매수") || order.medosu == "2") {
+                                buySum += amount
+                            } else {
+                                sellSum += amount
+                            }
+                        }
+                        _todayTotalBuy.value = buySum
+                        _todayTotalSell.value = sellSum
+
+                    } else {
+                        _executedOrders.value = emptyList()
+                        _todayTotalBuy.value = 0L
+                        _todayTotalSell.value = 0L
+                    }
+                } else {
+                    _executedOrders.value = emptyList()
+                }
+            } catch (e: Exception) {
+                _executedOrders.value = emptyList()
+            } finally {
+                _isExecutedLoading.value = false
             }
         }
     }

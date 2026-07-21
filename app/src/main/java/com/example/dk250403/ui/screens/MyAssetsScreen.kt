@@ -156,7 +156,7 @@ fun MyAssetsScreen(
             when (page) {
                 0 -> AssetsScreen(viewModel = viewModel) // 기존 잔고 화면 (다이어트 된 버전)
                 1 -> UnexecutedOrdersScreen(viewModel = viewModel) // 미체결
-                2 -> TransactionHistoryScreen() // 임시 거래내역 뷰
+                2 -> TransactionHistoryScreen(viewModel = viewModel) // 임시 거래내역 뷰
             }
         }
     }
@@ -780,9 +780,222 @@ fun UnexecutedOrdersScreen(viewModel: AssetsViewModel) {
 }
 
 
+// 거래내역
+@OptIn(ExperimentalMaterialApi::class, ExperimentalMaterial3Api::class)
 @Composable
-fun TransactionHistoryScreen() {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("거래 내역이 없습니다.", color = ColorTextSecondary)
+fun TransactionHistoryScreen(viewModel: AssetsViewModel) {
+    val executedList by viewModel.executedOrders.collectAsState()
+    val isLoading by viewModel.isExecutedLoading.collectAsState()
+    val totalBuyAmount by viewModel.todayTotalBuy.collectAsState()
+    val totalSellAmount by viewModel.todayTotalSell.collectAsState()
+    val stockMasterMap by viewModel.stockMasterMap.collectAsState()
+    val selectedAccount by viewModel.selectedAccount.collectAsState() // 계좌 감지용 추가
+
+    // 💡 2. 계좌가 선택되거나 화면이 열릴 때 자동으로 API를 호출하는 트리거 추가
+    LaunchedEffect(selectedAccount) {
+        if (selectedAccount.isNotEmpty()) {
+            viewModel.fetchExecutedOrders()
+        }
+    }
+
+    var selectedFilter by remember { mutableStateOf("전체") } // 필터 상태: 전체, 매수, 매도
+    val numberFormat = remember { java.text.DecimalFormat("#,###") }
+    val horizontalScrollState = rememberScrollState()
+
+    // 💡 3. 당겨서 새로고침 액션에 실제 함수 연결
+    val pullRefreshState = rememberPullRefreshState(
+        refreshing = isLoading,
+        onRefresh = { viewModel.fetchExecutedOrders() }
+    )
+
+    // 필터링 적용된 리스트
+    val filteredList = executedList.filter { order ->
+        when (selectedFilter) {
+            "매수" -> order.medosu.contains("매수") || order.medosu == "2"
+            "매도" -> order.medosu.contains("매도") || order.medosu == "1"
+            else -> true
+        }
+    }
+
+    // 컬럼 너비 설정 (미체결 내역과 동일하게 유지하되 체크박스 제외)
+    val colTime = 50.dp
+    val colName = 75.dp
+    val colExch = 40.dp
+    val colType = 50.dp
+    val colPrice = 70.dp  // 체결단가
+    val colQty = 60.dp    // 체결수량
+    val colOrdGb = 70.dp
+    val colOrdNo = 65.dp
+    val colMtd = 75.dp
+
+    Column(modifier = Modifier.fillMaxSize().background(ColorBg)) {
+
+        // ==========================================
+        // 1. 상단 대시보드 (총 매수/매도 금액)
+        // ==========================================
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(containerColor = ColorSurface),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text("당일 총 매수", fontSize = 12.sp, color = ColorTextSecondary)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("${numberFormat.format(totalBuyAmount)} 원", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = ColorUp)
+                }
+            }
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(containerColor = ColorSurface),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text("당일 총 매도", fontSize = 12.sp, color = ColorTextSecondary)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("${numberFormat.format(totalSellAmount)} 원", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = ColorDown)
+                }
+            }
+        }
+
+        // ==========================================
+        // 2. 필터 칩 (전체 / 매수 / 매도)
+        // ==========================================
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf("전체", "매수", "매도").forEach { filter ->
+                val isSelected = selectedFilter == filter
+
+                // 💡 선택 시 '매수'는 빨강, '매도'는 파랑, '전체'는 흰색으로 동적 할당
+                val activeTextColor = when (filter) {
+                    "매수" -> ColorUp
+                    "매도" -> ColorDown
+                    else -> ColorTextPrimary
+                }
+
+                FilterChip(
+                    selected = isSelected,
+                    onClick = { selectedFilter = filter },
+                    label = {
+                        Text(
+                            text = filter,
+                            fontSize = 12.sp,
+                            // 💡 선택 여부에 따라 폰트 굵기도 조금 더 강조
+                            fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Normal
+                        )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = ColorSurfaceVariant,
+                        selectedLabelColor = activeTextColor, // 💡 여기에 동적 컬러 적용
+                        containerColor = ColorSurface,
+                        labelColor = ColorTextSecondary       // 비활성화 시 기존 컬러 유지
+                    ),
+                    border = null
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // ==========================================
+        // 3. 표 헤더 영역 (가로 스크롤)
+        // ==========================================
+        Row(
+            modifier = Modifier.fillMaxWidth().background(ColorSurfaceVariant).padding(vertical = 10.dp).height(IntrinsicSize.Min),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 고정 영역 (주문번호, 종목명)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 16.dp).fillMaxHeight()) {
+                Text("체결시간", modifier = Modifier.width(colTime), color = ColorTextSecondary, fontSize = 11.sp, textAlign = TextAlign.Center)
+                Text("종목명", modifier = Modifier.width(colName), color = ColorTextSecondary, fontSize = 11.sp, textAlign = TextAlign.Center)
+            }
+
+            Box(modifier = Modifier.padding(horizontal = 8.dp).width(1.dp).fillMaxHeight().background(ColorTextSecondary.copy(alpha = 0.3f)))
+
+            // 스크롤 영역 (거래소, 구분, 체결단가, 체결수량 등 모든 항목)
+            Row(modifier = Modifier.horizontalScroll(horizontalScrollState).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
+                Text("거래소", modifier = Modifier.width(colExch), color = ColorTextSecondary, fontSize = 11.sp, textAlign = TextAlign.Center)
+                Text("구분", modifier = Modifier.width(colType), color = ColorTextSecondary, fontSize = 11.sp, textAlign = TextAlign.Center)
+                Text("체결단가", modifier = Modifier.width(colPrice), color = ColorTextSecondary, fontSize = 11.sp, textAlign = TextAlign.End)
+                Text("체결수량", modifier = Modifier.width(colQty), color = ColorTextSecondary, fontSize = 11.sp, textAlign = TextAlign.End)
+                Text("주문유형", modifier = Modifier.width(colOrdGb), color = ColorTextSecondary, fontSize = 11.sp, textAlign = TextAlign.Center)
+                Text("원주문번호", modifier = Modifier.width(colOrdNo), color = ColorTextSecondary, fontSize = 11.sp, textAlign = TextAlign.Center)
+                Text("매체", modifier = Modifier.width(colMtd), color = ColorTextSecondary, fontSize = 11.sp, textAlign = TextAlign.Center)
+                Spacer(modifier = Modifier.width(16.dp))
+            }
+        }
+
+        // ==========================================
+        // 4. 표 데이터 및 새로고침 영역
+        // ==========================================
+        Box(modifier = Modifier.fillMaxSize().pullRefresh(pullRefreshState)) {
+            if (filteredList.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.Center) {
+                    Text("당일 거래내역이 없습니다.", color = ColorTextSecondary)
+                }
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 80.dp)) {
+                    items(filteredList) { order ->
+                        val isBuy = order.medosu.contains("매수") || order.medosu == "2"
+                        val tradeColor = if (isBuy) ColorUp else ColorDown
+                        val tradeText = when (order.medosu) {
+                            "1" -> "매도"
+                            "2" -> "매수"
+                            else -> order.medosu
+                        }
+
+                        val timeFormatted = if (order.ordtime.length >= 6) {
+                            "${order.ordtime.substring(0, 2)}:${order.ordtime.substring(2, 4)}:${order.ordtime.substring(4, 6)}"
+                        } else order.ordtime
+
+                        val ordGbText = if (order.ordgb.isBlank()) "보통" else order.ordgb
+                        val displayStockName = stockMasterMap[order.expcode] ?: order.expcode
+
+                        // 💡 읽기 전용이므로 Modifier.clickable 제외
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 14.dp).height(IntrinsicSize.Min),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 16.dp).fillMaxHeight()) {
+                                    Text(timeFormatted, modifier = Modifier.width(colTime), color = ColorTextSecondary, fontSize = 12.sp, textAlign = TextAlign.Center)
+                                    Text(
+                                        text = displayStockName, modifier = Modifier.width(colName), color = ColorTextPrimary, fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold, textAlign = TextAlign.Center, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                    )
+                                }
+
+                                Box(modifier = Modifier.padding(horizontal = 8.dp).width(1.dp).fillMaxHeight().background(ColorSurfaceVariant))
+
+                                Row(modifier = Modifier.horizontalScroll(horizontalScrollState).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(order.exchname.take(3), modifier = Modifier.width(colExch), color = ColorTextSecondary, fontSize = 12.sp, textAlign = TextAlign.Center)
+                                    Text(tradeText, modifier = Modifier.width(colType), color = tradeColor, fontSize = 12.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+                                    Text(numberFormat.format(order.cheprice), modifier = Modifier.width(colPrice), color = ColorTextPrimary, fontSize = 12.sp, textAlign = TextAlign.End)
+                                    Text(numberFormat.format(order.cheqty), modifier = Modifier.width(colQty), color = ColorTextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.End)
+                                    Text(ordGbText, modifier = Modifier.width(colOrdGb), color = ColorTextSecondary, fontSize = 12.sp, textAlign = TextAlign.Center)
+                                    Text(order.ordno.toString(), modifier = Modifier.width(colOrdNo), color = ColorTextPrimary, fontSize = 12.sp, textAlign = TextAlign.Center)
+                                    Text(order.ordermtd, modifier = Modifier.width(colMtd), color = ColorTextSecondary, fontSize = 12.sp, textAlign = TextAlign.Center)
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                }
+                            }
+                            HorizontalDivider(color = ColorSurfaceVariant.copy(alpha = 0.5f))
+                        }
+                    }
+                }
+            }
+
+            PullRefreshIndicator(
+                refreshing = isLoading,
+                state = pullRefreshState,
+                modifier = Modifier.align(Alignment.TopCenter),
+                contentColor = ColorStatus,
+                backgroundColor = ColorSurface.copy(alpha = 0.9f)
+            )
+        }
     }
 }
