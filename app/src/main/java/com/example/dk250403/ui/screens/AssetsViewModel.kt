@@ -80,6 +80,10 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
     private val _todayTotalSell = MutableStateFlow(0L)
     val todayTotalSell: StateFlow<Long> = _todayTotalSell.asStateFlow()
 
+    private var lastAutoRefreshTime = 0L // 💡 추가: 자동 새로고침(체결 감지) 쿨타임용
+
+    private var pollingJob: Job? = null // 💡 추가: 미체결 상태 감시용
+
     init {
         observeRealtimeWebSocket()
     }
@@ -149,60 +153,60 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         fetchStockMaster(currentUid, firstAccount)
     }
 
-    fun requestBalanceForAccount(accountNumber: String) {
+    // 💡 isSilent 매개변수 추가: true일 경우 로딩 화면(로딩바)을 띄우지 않고 백그라운드에서 몰래 갱신합니다.
+    fun requestBalanceForAccount(accountNumber: String, isSilent: Boolean = false) {
         val currentUid = auth.currentUser?.uid ?: ""
         if (currentUid.isEmpty()) return
 
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastRequestTime < 1000) {
-            _uiState.value = UiState.Error("조회 요청이 너무 빠릅니다.\n잠시 후 다시 눌러주세요.")
+            if (!isSilent) _uiState.value = UiState.Error("조회 요청이 너무 빠릅니다.\n잠시 후 다시 눌러주세요.")
             return
         }
         lastRequestTime = currentTime
         _selectedAccount.value = accountNumber
 
         if (!accountNumber.all { it.isDigit() } || accountNumber.length !in 10..11) {
-            _uiState.value = UiState.Error("조회할 수 없는 계좌입니다.\n계좌번호를 다시 확인해 주세요.")
+            if (!isSilent) _uiState.value = UiState.Error("조회할 수 없는 계좌입니다.\n계좌번호를 다시 확인해 주세요.")
             return
         }
 
         val accountInfo = tokenManager.getCredentialsForAccount(currentUid, accountNumber)
         if (accountInfo == null || accountInfo.appKey.isEmpty() || accountInfo.secretKey.isEmpty()) {
-            _uiState.value = UiState.Error("[$accountNumber] 계좌에 대한 앱키 설정이 누락되었습니다.")
+            if (!isSilent) _uiState.value = UiState.Error("[$accountNumber] 계좌에 대한 앱키 설정이 누락되었습니다.")
             return
         }
 
         val token = tokenManager.getAccessToken(currentUid, accountNumber)
         if (!token.isNullOrEmpty()) {
-            fetchBalance(currentUid, accountNumber, token)
+            fetchBalance(currentUid, accountNumber, token, isSilent)
         } else {
-            issueAccessTokenAndFetch(currentUid, accountInfo.appKey, accountInfo.secretKey, accountNumber)
+            issueAccessTokenAndFetch(currentUid, accountInfo.appKey, accountInfo.secretKey, accountNumber, isSilent)
         }
     }
-
-    private fun issueAccessTokenAndFetch(uid: String, appKey: String, appSecret: String, targetAccount: String) {
+    private fun issueAccessTokenAndFetch(uid: String, appKey: String, appSecret: String, targetAccount: String, isSilent: Boolean = false) {
         fetchJob?.cancel()
         fetchJob = viewModelScope.launch {
-            _uiState.value = UiState.Loading
+            if (!isSilent) _uiState.value = UiState.Loading
             try {
                 val response = RetrofitClient.lsApi.getAccessToken(appKey = appKey, appSecretKey = appSecret)
                 if (response.isSuccessful && response.body() != null) {
                     val token = response.body()!!.accessToken
                     tokenManager.saveAccessToken(uid, targetAccount, token)
-                    fetchBalance(uid, targetAccount, token)
+                    fetchBalance(uid, targetAccount, token, isSilent)
                 } else {
-                    _uiState.value = UiState.Error("[$targetAccount]\n토큰 발급 실패 (앱키/시크릿키를 확인하세요)")
+                    if (!isSilent) _uiState.value = UiState.Error("[$targetAccount]\n토큰 발급 실패 (앱키/시크릿키를 확인하세요)")
                 }
             } catch (e: Exception) {
-                _uiState.value = UiState.Error("[$targetAccount]\n네트워크 오류: ${e.localizedMessage}")
+                if (!isSilent) _uiState.value = UiState.Error("[$targetAccount]\n네트워크 오류: ${e.localizedMessage}")
             }
         }
     }
 
-    private fun fetchBalance(uid: String, accountNumber: String, token: String) {
+    private fun fetchBalance(uid: String, accountNumber: String, token: String, isSilent: Boolean = false) {
         fetchJob?.cancel()
         fetchJob = viewModelScope.launch {
-            _uiState.value = UiState.Loading
+            if (!isSilent) _uiState.value = UiState.Loading
             try {
                 val request = BalanceRequest(T0424InBlock(accno = accountNumber))
                 val response = RetrofitClient.lsApi.getAccountBalance(token = "Bearer $token", request = request)
@@ -211,9 +215,8 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
                     val body = response.body()!!
                     if (body.rspCd != "00000" && body.rspCd.isNotEmpty()) {
                         val errorMsg = if (body.rspMsg.isNotEmpty()) body.rspMsg else "해당 계좌는 조회가 되지 않습니다."
-                        _uiState.value = UiState.Error("[$accountNumber]\n$errorMsg")
+                        if (!isSilent) _uiState.value = UiState.Error("[$accountNumber]\n$errorMsg")
                     } else {
-                        // 💡 최초 조회 시점에 정렬 기준 적용
                         val sortedHoldings = sortHoldings(body.holdings ?: emptyList(), _sortType.value)
                         _uiState.value = UiState.BalanceLoaded(body.copy(holdings = sortedHoldings))
 
@@ -230,13 +233,13 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
 
                     if (response.code() == 401 || parsedMsg.contains("만료") || parsedMsg.contains("유효하지 않")) {
                         tokenManager.clearAccessToken(uid, accountNumber)
-                        _uiState.value = UiState.Error("[$accountNumber]\n토큰이 만료되었습니다. 다시 탭을 눌러주세요.")
+                        if (!isSilent) _uiState.value = UiState.Error("[$accountNumber]\n토큰이 만료되었습니다. 다시 탭을 눌러주세요.")
                     } else {
-                        _uiState.value = UiState.Error("[$accountNumber] 잔고 조회 실패:\n$parsedMsg")
+                        if (!isSilent) _uiState.value = UiState.Error("[$accountNumber] 잔고 조회 실패:\n$parsedMsg")
                     }
                 }
             } catch (e: Exception) {
-                _uiState.value = UiState.Error("[$accountNumber]\n통신 오류: ${e.localizedMessage}")
+                if (!isSilent) _uiState.value = UiState.Error("[$accountNumber]\n통신 오류: ${e.localizedMessage}")
             }
         }
     }
@@ -268,6 +271,7 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // 💡 1. SC1 웹소켓 시도 제거 (기존 US3 시세만 수신)
     private fun subscribeToHoldings(holdings: List<StockHolding>) {
         subscribedCodes.forEach { code ->
             val trKey = "U$code   "
@@ -287,41 +291,36 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             LsWebSocketManager.realtimeDataFlow.collect { json ->
                 val currentState = _uiState.value
-                if (currentState is UiState.BalanceLoaded) {
-                    try {
-                        val header = json.optJSONObject("header")
-                        val body = json.optJSONObject("body")
-                        if (header != null && body != null) {
-                            val trCd = header.optString("tr_cd")
+                try {
+                    val header = json.optJSONObject("header")
+                    val body = json.optJSONObject("body")
+                    if (header != null && body != null) {
+                        val trCd = header.optString("tr_cd")
+                        // US3 시세 처리 로직만 유지
+                        if (trCd == "US3" && currentState is UiState.BalanceLoaded) {
+                            val rawStockCode = body.optString("shcode")
+                            val currentPriceStr = body.optString("price")
+                            val changeRateStr = body.optString("drate")
 
-                            if (trCd == "US3") {
-                                val rawStockCode = body.optString("shcode")
-                                val currentPriceStr = body.optString("price")
-                                val changeRateStr = body.optString("drate")
-                                // 💡 추가: LS웹소켓에서 부호와 전일대비금액 추출
-                                val signStr = body.optString("sign")
-                                val changeStr = body.optString("change")
-                                val stockCode = rawStockCode.filter { it.isDigit() }.takeLast(6)
+                            val signStr = body.optString("sign")
+                            val changeStr = body.optString("change")
+                            val stockCode = rawStockCode.filter { it.isDigit() }.takeLast(6)
 
-                                if (stockCode.isNotEmpty() && currentPriceStr.isNotEmpty()) {
-                                    val newPrice = currentPriceStr.replace(",", "").toLongOrNull() ?: return@collect
-                                    val newChangeRate = changeRateStr.replace(",", "").toDoubleOrNull() ?: 0.0
-                                    val changeAmt = changeStr.replace(",", "").toLongOrNull() ?: 0L
+                            if (stockCode.isNotEmpty() && currentPriceStr.isNotEmpty()) {
+                                val newPrice = currentPriceStr.replace(",", "").toLongOrNull() ?: return@collect
+                                val newChangeRate = changeRateStr.replace(",", "").toDoubleOrNull() ?: 0.0
+                                val changeAmt = changeStr.replace(",", "").toLongOrNull() ?: 0L
 
-                                    // 💡 부호(1,2:상승 / 4,5:하락)에 따라 정확한 전일종가 역산
-                                    val baseYesterdayPrice = when (signStr) {
-                                        "1", "2" -> newPrice - changeAmt
-                                        "4", "5" -> newPrice + changeAmt
-                                        else -> newPrice
-                                    }
-
-                                    // 💡 baseYesterdayPrice 파라미터 추가 전송
-                                    updateStockPrice(currentState, stockCode, newPrice, newChangeRate, baseYesterdayPrice)
+                                val baseYesterdayPrice = when (signStr) {
+                                    "1", "2" -> newPrice - changeAmt
+                                    "4", "5" -> newPrice + changeAmt
+                                    else -> newPrice
                                 }
+                                updateStockPrice(currentState, stockCode, newPrice, newChangeRate, baseYesterdayPrice)
                             }
                         }
-                    } catch (e: Exception) {}
-                }
+                    }
+                } catch (e: Exception) {}
             }
         }
     }
@@ -445,53 +444,32 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
             onResult(false, "계좌를 먼저 선택해주세요.")
             return
         }
-
         val token = tokenManager.getAccessToken(currentUid, account)
         if (token.isNullOrEmpty()) {
             onResult(false, "인증 토큰이 없습니다. 계좌를 다시 조회해주세요.")
             return
         }
 
-        // --- 💡 2-1. 시간대별 스마트 라우팅 (거래소 판별) ---
         val calendar = Calendar.getInstance()
         val currentTimeHHmm = calendar.get(Calendar.HOUR_OF_DAY) * 100 + calendar.get(Calendar.MINUTE)
-
-        // 08:00~08:49 또는 15:40~19:59 인 경우 NXT, 그 외는 KRX로 세팅
-        val targetMbrNo = if ((currentTimeHHmm in 800..849) || (currentTimeHHmm in 1540..1999)) {
-            "NXT"
-        } else {
-            "KRX"
-        }
-        // ---------------------------------------------------
-
+        val targetMbrNo = if ((currentTimeHHmm in 800..849) || (currentTimeHHmm in 1540..1999)) "NXT" else "KRX"
         val bnsTpCode = if (tradeType == com.example.dk250403.ui.screens.TradeType.BUY) "2" else "1"
 
-        // 💡 2-2. 2차 방어 로직: 만약 NXT 라우팅인데 시장가(MARKET)가 넘어왔다면 안전을 위해 강제로 지정가(LIMIT)로 덮어씌움
         var finalOrderType = orderType
         if (targetMbrNo == "NXT" && orderType == com.example.dk250403.ui.screens.OrderType.MARKET) {
             finalOrderType = com.example.dk250403.ui.screens.OrderType.LIMIT
         }
-
         val ordprcPtnCode = if (finalOrderType == com.example.dk250403.ui.screens.OrderType.LIMIT) "00" else "03"
         val finalPrice = if (finalOrderType == com.example.dk250403.ui.screens.OrderType.MARKET) 0L else price
 
         val inBlock = com.example.dk250403.network.CSPAT00601InBlock1(
-            isuNo = stockCode,
-            ordQty = quantity,
-            ordPrc = finalPrice,
-            bnsTpCode = bnsTpCode,
-            ordprcPtnCode = ordprcPtnCode,
-            mbrNo = targetMbrNo // 💡 시간에 따라 결정된 거래소 세팅
+            isuNo = stockCode, ordQty = quantity, ordPrc = finalPrice, bnsTpCode = bnsTpCode, ordprcPtnCode = ordprcPtnCode, mbrNo = targetMbrNo
         )
         val request = com.example.dk250403.network.OrderRequest(inBlock)
 
         viewModelScope.launch {
             try {
-                val response = com.example.dk250403.network.RetrofitClient.lsApi.submitOrder(
-                    token = "Bearer $token",
-                    request = request
-                )
-
+                val response = com.example.dk250403.network.RetrofitClient.lsApi.submitOrder(token = "Bearer $token", request = request)
                 if (response.isSuccessful && response.body() != null) {
                     val body = response.body()!!
                     val orderNo = body.outBlock2?.ordNo ?: 0L
@@ -499,6 +477,12 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
 
                     if (body.rsp_cd == "00000" || orderNo > 0L || responseMessage.contains("완료") || responseMessage.contains("접수")) {
                         onResult(true, "$responseMessage (주문번호: $orderNo)")
+
+                        // 💡 주문 접수 직후 미체결 내역 및 잔고 즉시 1회 확인
+                        kotlinx.coroutines.delay(500)
+                        fetchUnexecutedOrders(isSilent = true)
+                        // 시장가 체결 가능성을 위해 잔고도 갱신
+                        requestBalanceForAccount(account, isSilent = true)
                     } else {
                         onResult(false, "주문 거절: $responseMessage")
                     }
@@ -515,46 +499,85 @@ class AssetsViewModel(application: Application) : AndroidViewModel(application) 
     // =======================================================
     // 💡 [미체결 내역 조회 로직]
     // =======================================================
-    fun fetchUnexecutedOrders() {
+// 💡 4. '스마트 폴링' 기법 적용 (미체결 수량 변화 감지)
+    fun fetchUnexecutedOrders(isSilent: Boolean = false) {
         val currentUid = auth.currentUser?.uid ?: return
         val account = _selectedAccount.value
         if (account.isEmpty()) return
+        val token = tokenManager.getAccessToken(currentUid, account) ?: return
 
-        val token = tokenManager.getAccessToken(currentUid, account)
-        if (token.isNullOrEmpty()) return
-
-        // 💡 여기에 추가: 토큰과 계좌가 모두 준비된 확실한 시점에 사전 다운로드!
-        // 💡 파라미터 추가
-        fetchStockMaster(currentUid, account)
-
-        _isUnexecutedLoading.value = true
+        if (!isSilent) fetchStockMaster(currentUid, account)
+        if (!isSilent) _isUnexecutedLoading.value = true
 
         viewModelScope.launch {
             try {
-                val request = com.example.dk250403.network.T0425Request(
-                    com.example.dk250403.network.T0425InBlock() // 기본값이 모두 설정되어 있으므로 빈 괄호
-                )
-                val response = com.example.dk250403.network.RetrofitClient.lsApi.getUnexecutedOrders(
-                    token = "Bearer $token",
-                    request = request
-                )
+                val request = com.example.dk250403.network.T0425Request(com.example.dk250403.network.T0425InBlock())
+                val response = com.example.dk250403.network.RetrofitClient.lsApi.getUnexecutedOrders(token = "Bearer $token", request = request)
 
                 if (response.isSuccessful && response.body() != null) {
                     val body = response.body()!!
                     if ((body.rsp_cd == "00000" || body.rsp_cd?.contains("00156") == true) && body.unexecutedList != null) {
-                        _unexecutedOrders.value = body.unexecutedList
+
+                        val oldList = _unexecutedOrders.value
+                        val newList = body.unexecutedList
+
+                        val oldRemSum = oldList.sumOf { it.ordrem }
+                        val newRemSum = newList.sumOf { it.ordrem }
+
+                        _unexecutedOrders.value = newList
+
+                        // 💡 미체결 잔량이 이전보다 줄어들었다면 = 체결 발생!
+                        if (newRemSum < oldRemSum) {
+                            requestBalanceForAccount(account, isSilent = true)
+                            fetchExecutedOrders()
+                        }
+
+                        // 미체결이 1개라도 남아있으면 폴링 시작, 없으면 종료
+                        if (newList.isNotEmpty()) startPollingJob() else stopPollingJob()
+
                     } else {
-                        _unexecutedOrders.value = emptyList()
+                        checkAndStopPolling(emptyList())
                     }
                 } else {
-                    _unexecutedOrders.value = emptyList()
+                    checkAndStopPolling(emptyList())
                 }
             } catch (e: Exception) {
-                _unexecutedOrders.value = emptyList()
+                checkAndStopPolling(emptyList())
             } finally {
-                _isUnexecutedLoading.value = false
+                if (!isSilent) _isUnexecutedLoading.value = false
             }
         }
+    }
+
+    private fun checkAndStopPolling(newList: List<com.example.dk250403.network.T0425OutBlock1>) {
+        val oldRemSum = _unexecutedOrders.value.sumOf { it.ordrem }
+        _unexecutedOrders.value = newList
+        if (oldRemSum > 0) {
+            // 미체결이 있다가 사라진 경우(전량 체결/취소) 잔고 갱신
+            val account = _selectedAccount.value
+            if (account.isNotEmpty()) {
+                requestBalanceForAccount(account, isSilent = true)
+                fetchExecutedOrders()
+            }
+        }
+        stopPollingJob()
+    }
+
+    // 폴링 시작
+    private fun startPollingJob() {
+        if (pollingJob?.isActive == true) return
+        pollingJob = viewModelScope.launch {
+            while (_unexecutedOrders.value.isNotEmpty()) {
+                kotlinx.coroutines.delay(2500) // 💡 2.5초마다 몰래 미체결 상태 점검
+                fetchUnexecutedOrders(isSilent = true)
+            }
+        }
+    }
+
+    // 폴링 종료
+    private fun stopPollingJob() {
+        pollingJob?.cancel()
+        pollingJob = null
     }
 
     // =======================================================

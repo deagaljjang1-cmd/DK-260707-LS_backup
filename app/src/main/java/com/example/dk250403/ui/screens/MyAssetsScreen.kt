@@ -69,7 +69,7 @@ import androidx.compose.ui.text.style.TextOverflow
 @Composable
 fun MyAssetsScreen(
     modifier: Modifier = Modifier,
-    viewModel: AssetsViewModel = viewModel()
+    viewModel: AssetsViewModel // 💡 기본값(= viewModel())을 제거하고 부모에게서 주입받음
 ) {
     val accounts by viewModel.registeredAccounts.collectAsState()
     val selectedAccount by viewModel.selectedAccount.collectAsState()
@@ -79,10 +79,19 @@ fun MyAssetsScreen(
     val pagerState = rememberPagerState(pageCount = { tabs.size })
     val coroutineScope = rememberCoroutineScope()
 
+    // 🚨 기존에 있던 LaunchedEffect(Unit) { viewModel.initAssets() } 삭제 🚨
 
-
-    LaunchedEffect(Unit) {
-        viewModel.initAssets()
+    // 💡 1. 탭 이동을 감지하여 조용한 새로고침(Silent Refresh) 실행
+    LaunchedEffect(pagerState.currentPage) {
+        if (selectedAccount.isNotEmpty()) {
+            when (pagerState.currentPage) {
+                // 잔고 탭(0)으로 돌아올 때 백그라운드에서 잔고 갱신
+                0 -> viewModel.requestBalanceForAccount(selectedAccount, isSilent = true)
+                // 미체결(1), 거래내역(2) 탭 진입 시 갱신
+                1 -> viewModel.fetchUnexecutedOrders(isSilent = true)
+                2 -> viewModel.fetchExecutedOrders()
+            }
+        }
     }
 
     Column(modifier = modifier.fillMaxSize().background(ColorBg)) {
