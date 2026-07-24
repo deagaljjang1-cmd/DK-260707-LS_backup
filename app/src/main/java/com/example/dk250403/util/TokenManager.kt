@@ -40,7 +40,7 @@ class TokenManager private constructor(context: Context) {
 
         context,
 
-        "ls_secure_prefs",
+        "ls_secure_prefs_v2",
 
         masterKey,
 
